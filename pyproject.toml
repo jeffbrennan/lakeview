@@ -1,0 +1,22 @@
+[project]
+name = "lakeview"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Jeff Brennan", email = "jeffbrennan10@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+lakeview = "lakeview:main"
+
+[tool.maturin]
+module-name = "lakeview._core"
+python-packages = ["lakeview"]
+python-source = "src"
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
