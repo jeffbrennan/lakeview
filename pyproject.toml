@@ -17,7 +17,7 @@ lakeview = "lakeview:main"
 [tool.maturin]
 module-name = "lakeview._core"
 python-packages = ["lakeview"]
-python-source = "python"
+python-source = "src"
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
