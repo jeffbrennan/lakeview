@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
+use test_case::test_case;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -165,67 +166,17 @@ fn parse_delta_metadata(path: &Path) -> io::Result<MetadataDelta> {
         ))
     }
 }
+#[test_case("tests/data/delta/uniform/_delta_log/00000000000000000000.json" ; "add")]
+#[test_case("tests/data/delta/fragmented/_delta_log/00000000000000000052.json" ; "remove")]
+#[test_case("tests/data/delta/compacted/_delta_log/00000000000000000063.json" ; "optimize")]
+#[test_case("tests/data/delta/compacted/_delta_log/00000000000000000064.json" ; "vacuum_start")]
+#[test_case("tests/data/delta/compacted/_delta_log/00000000000000000065.json" ; "vacuum_end")]
+fn test_parse_delta_metadata(path: &str) {
+    let test_path = Path::new(path);
+    let result = parse_delta_metadata(test_path);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_delta_metadata_add() {
-        let test_path = Path::new("tests/data/delta/uniform/_delta_log/00000000000000000000.json");
-        let result = parse_delta_metadata(test_path);
-
-        match result {
-            Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
-            Err(e) => panic!("Failed to parse: {}", e),
-        }
-    }
-
-    #[test]
-    fn test_parse_delta_metadata_remove() {
-        let test_path =
-            Path::new("tests/data/delta/fragmented/_delta_log/00000000000000000052.json");
-        let result = parse_delta_metadata(test_path);
-
-        match result {
-            Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
-            Err(e) => panic!("Failed to parse: {}", e),
-        }
-    }
-    #[test]
-    fn test_parse_delta_metadata_optimize() {
-        // TODO: handle optimize case, could be any number of files
-        let test_path =
-            Path::new("tests/data/delta/compacted/_delta_log/00000000000000000063.json");
-        let result = parse_delta_metadata(test_path);
-
-        match result {
-            Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
-            Err(e) => panic!("Failed to parse: {}", e),
-        }
-    }
-    #[test]
-    fn test_parse_delta_metadata_vacuum_start() {
-        // TODO
-        let test_path =
-            Path::new("tests/data/delta/compacted/_delta_log/00000000000000000064.json");
-        let result = parse_delta_metadata(test_path);
-
-        match result {
-            Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
-            Err(e) => panic!("Failed to parse: {}", e),
-        }
-    }
-    #[test]
-    fn test_parse_delta_metadata_vacuum_end() {
-        // TODO
-        let test_path =
-            Path::new("tests/data/delta/compacted/_delta_log/00000000000000000065.json");
-        let result = parse_delta_metadata(test_path);
-
-        match result {
-            Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
-            Err(e) => panic!("Failed to parse: {}", e),
-        }
+    match result {
+        Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
+        Err(e) => panic!("Failed to parse: {}", e),
     }
 }
