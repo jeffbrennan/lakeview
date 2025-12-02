@@ -14,6 +14,12 @@ dependencies = [
 [project.scripts]
 lakeview = "lakeview:main"
 
+[project.optional-dependencies]
+dev = [
+    "deltalake>=1.2.1",
+    "pyarrow>=22.0.0",
+]
+
 [tool.maturin]
 module-name = "lakeview._core"
 python-packages = ["lakeview"]

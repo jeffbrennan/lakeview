@@ -1,0 +1,203 @@
+import argparse
+import shutil
+from pathlib import Path
+
+import pyarrow as pa
+from deltalake import DeltaTable, write_deltalake
+
+
+def generate_sample_data(num_rows: int, batch_id: int = 0) -> pa.Table:
+    return pa.table(
+        {
+            "id": pa.array(
+                range(batch_id * num_rows, (batch_id + 1) * num_rows)
+            ),
+            "batch_id": pa.array([batch_id] * num_rows),
+            "value": pa.array([f"value_{i}" for i in range(num_rows)]),
+            "amount": pa.array(
+                [float(i * 1.5) for i in range(num_rows)], type=pa.float64()
+            ),
+        }
+    )
+
+
+def create_fragmented_table(
+    base_path: Path, num_batches: int = 50, rows_per_batch: int = 100
+) -> Path:
+    table_path = base_path / "fragmented"
+    if table_path.exists():
+        shutil.rmtree(table_path)
+    table_path.mkdir(parents=True)
+
+    table_uri = str(table_path)
+
+    # Write many small batches to create file fragmentation
+    for batch_id in range(num_batches):
+        data = generate_sample_data(rows_per_batch, batch_id)
+        write_deltalake(table_uri, data, mode="append")
+
+    # Perform some delete operations to add tombstones
+    dt = DeltaTable(table_uri)
+
+    # Delete rows where batch_id is divisible by 4
+    for batch_id in range(0, num_batches, 4):
+        dt.delete(f"batch_id = {batch_id}")
+
+    print(f"Created fragmented table at {table_path}")
+    print(f"  - Files: {len(dt.file_uris())}")
+    print(f"  - Version: {dt.version()}")
+
+    return table_path
+
+
+def create_compacted_table(
+    base_path: Path, num_batches: int = 50, rows_per_batch: int = 100
+) -> Path:
+    table_path = base_path / "compacted"
+    if table_path.exists():
+        shutil.rmtree(table_path)
+    table_path.mkdir(parents=True)
+
+    table_uri = str(table_path)
+
+    for batch_id in range(num_batches):
+        data = generate_sample_data(rows_per_batch, batch_id)
+        write_deltalake(table_uri, data, mode="append")
+
+    dt = DeltaTable(table_uri)
+
+    for batch_id in range(0, num_batches, 4):
+        dt.delete(f"batch_id = {batch_id}")
+
+    dt.optimize.compact()
+
+    dt.vacuum(
+        retention_hours=0, enforce_retention_duration=False, dry_run=False
+    )
+
+    print(f"Created compacted table at {table_path}")
+    print(f"  - Files: {len(dt.file_uris())}")
+    print(f"  - Version: {dt.version()}")
+
+    return table_path
+
+
+def create_uniform_table(
+    base_path: Path, num_files: int = 10, rows_per_file: int = 10_000
+) -> Path:
+    table_path = base_path / "uniform"
+    if table_path.exists():
+        shutil.rmtree(table_path)
+    table_path.mkdir(parents=True)
+
+    table_uri = str(table_path)
+
+    for batch_id in range(num_files):
+        data = generate_sample_data(rows_per_file, batch_id)
+        write_deltalake(table_uri, data, mode="append")
+
+    dt = DeltaTable(table_uri)
+
+    print(f"Created uniform table at {table_path}")
+    print(f"  - Files: {len(dt.file_uris())}")
+    print(f"  - Version: {dt.version()}")
+
+    return table_path
+
+
+def create_partitioned_table(
+    base_path: Path, num_partitions: int = 5, rows_per_partition: int = 10_000
+) -> Path:
+    table_path = base_path / "partitioned"
+    if table_path.exists():
+        shutil.rmtree(table_path)
+    table_path.mkdir(parents=True)
+
+    table_uri = str(table_path)
+
+    for partition_id in range(num_partitions):
+        data = pa.table(
+            {
+                "id": pa.array(
+                    range(
+                        partition_id * rows_per_partition,
+                        (partition_id + 1) * rows_per_partition,
+                    )
+                ),
+                "category": pa.array(
+                    [f"category_{partition_id}"] * rows_per_partition
+                ),
+                "value": pa.array(
+                    [f"value_{i}" for i in range(rows_per_partition)]
+                ),
+                "amount": pa.array(
+                    [float(i * 1.5) for i in range(rows_per_partition)],
+                    type=pa.float64(),
+                ),
+            }
+        )
+        write_deltalake(
+            table_uri, data, mode="append", partition_by=["category"]
+        )
+
+    dt = DeltaTable(table_uri)
+
+    print(f"Created partitioned table at {table_path}")
+    print(f"  - Files: {len(dt.file_uris())}")
+    print(f"  - Version: {dt.version()}")
+
+    return table_path
+
+
+def create_all_tables(output_dir: Path) -> dict[str, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    return {
+        "fragmented": create_fragmented_table(output_dir),
+        "compacted": create_compacted_table(output_dir),
+        "uniform": create_uniform_table(output_dir),
+        "partitioned": create_partitioned_table(output_dir),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Generate delta table variants for testing and development"
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=Path,
+        default=Path("tests/data"),
+        help="Output directory for generated tables (default: tests/data)",
+    )
+    parser.add_argument(
+        "-t",
+        "--table-type",
+        choices=["all", "fragmented", "compacted", "uniform", "partitioned"],
+        default="all",
+        help="Type of table to generate (default: all)",
+    )
+
+    args = parser.parse_args()
+
+    print(f"Generating delta tables in: {args.output_dir.absolute()}")
+    print("-" * 50)
+
+    if args.table_type == "all":
+        create_all_tables(args.output_dir)
+    elif args.table_type == "fragmented":
+        create_fragmented_table(args.output_dir)
+    elif args.table_type == "compacted":
+        create_compacted_table(args.output_dir)
+    elif args.table_type == "uniform":
+        create_uniform_table(args.output_dir)
+    elif args.table_type == "partitioned":
+        create_partitioned_table(args.output_dir)
+
+    print("-" * 50)
+    print("Done!")
+
+
+if __name__ == "__main__":
+    main()
