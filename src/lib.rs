@@ -39,9 +39,16 @@ struct MetadataDeltaOperationAdd {
     clustering_provider: Option<String>,
 }
 
-// TODO
 #[derive(Debug, Deserialize, Serialize)]
-struct MetadataDeltaOperationRemove;
+#[serde(rename_all = "camelCase")]
+struct MetadataDeltaOperationRemove {
+    path: String,
+    data_change: bool,
+    deletion_timestamp: u64,
+    extended_file_metadata: bool,
+    partition_values: HashMap<String, String>,
+    size: u64,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -51,7 +58,7 @@ enum MetadataDeltaOperation {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct MetadataDeltaOperationMetrics {
+struct MetadataDeltaOperationMetricsAdd {
     execution_time_ms: u64,
     num_added_files: u16,
     num_added_rows: u64,
@@ -59,6 +66,25 @@ struct MetadataDeltaOperationMetrics {
     num_removed_files: u16,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct MetadataDeltaOperationMetricsRemove {
+    execution_time_ms: u64,
+    num_added_files: u16,
+    num_copied_rows: u64,
+    num_deleted_rows: u64,
+    num_removed_files: u16,
+    rewrite_time_ms: u32,
+    scan_time_ms: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum MetadataDeltaOperationMetrics {
+    Add(MetadataDeltaOperationMetricsAdd),
+    Remove(MetadataDeltaOperationMetricsRemove),
+}
+
+// TODO parse schema string, stats
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MetadataDeltaCommit {
@@ -100,8 +126,8 @@ struct CommitLine {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct MetadataDelta {
-    protocol: MetadataDeltaProtocol,
-    metadata: MetadataDeltaMetadata,
+    protocol: Option<MetadataDeltaProtocol>,
+    metadata: Option<MetadataDeltaMetadata>,
     operation: MetadataDeltaOperation,
     commit: MetadataDeltaCommit,
 }
@@ -116,18 +142,34 @@ fn read_lines(path: &Path) -> io::Result<Vec<String>> {
 
 fn parse_delta_metadata(path: &Path) -> io::Result<MetadataDelta> {
     let lines = read_lines(path)?;
+    if lines.len() == 2 {
+        let operation: MetadataDeltaOperation = serde_json::from_str(&lines[0])?;
+        let commit_line: CommitLine = serde_json::from_str(&lines[1])?;
 
-    let protocol_line: ProtocolLine = serde_json::from_str(&lines[0])?;
-    let metadata_line: MetadataLine = serde_json::from_str(&lines[1])?;
-    let operation: MetadataDeltaOperation = serde_json::from_str(&lines[2])?;
-    let commit_line: CommitLine = serde_json::from_str(&lines[3])?;
+        Ok(MetadataDelta {
+            protocol: None,
+            metadata: None,
+            operation: operation,
+            commit: commit_line.commit,
+        })
+    } else if lines.len() == 4 {
+        let protocol_line: ProtocolLine = serde_json::from_str(&lines[0])?;
+        let metadata_line: MetadataLine = serde_json::from_str(&lines[1])?;
+        let operation: MetadataDeltaOperation = serde_json::from_str(&lines[2])?;
+        let commit_line: CommitLine = serde_json::from_str(&lines[3])?;
 
-    Ok(MetadataDelta {
-        protocol: protocol_line.protocol,
-        metadata: metadata_line.metadata,
-        operation: operation,
-        commit: commit_line.commit,
-    })
+        Ok(MetadataDelta {
+            protocol: Some(protocol_line.protocol),
+            metadata: Some(metadata_line.metadata),
+            operation: operation,
+            commit: commit_line.commit,
+        })
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Expected 2 or 4 lines, got {}", lines.len()),
+        ))
+    }
 }
 
 #[pymodule]
@@ -141,8 +183,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_delta_metadata() {
+    fn test_parse_delta_metadata_add() {
         let test_path = Path::new("tests/data/delta/uniform/_delta_log/00000000000000000000.json");
+        let result = parse_delta_metadata(test_path);
+
+        match result {
+            Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
+            Err(e) => panic!("Failed to parse: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_parse_delta_metadata_remove() {
+        let test_path =
+            Path::new("tests/data/delta/fragmented/_delta_log/00000000000000000052.json");
         let result = parse_delta_metadata(test_path);
 
         match result {
