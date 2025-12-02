@@ -192,4 +192,40 @@ mod tests {
             Err(e) => panic!("Failed to parse: {}", e),
         }
     }
+    #[test]
+    fn test_parse_delta_metadata_optimize() {
+        // TODO: handle optimize case, could be any number of files
+        let test_path =
+            Path::new("tests/data/delta/compacted/_delta_log/00000000000000000063.json");
+        let result = parse_delta_metadata(test_path);
+
+        match result {
+            Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
+            Err(e) => panic!("Failed to parse: {}", e),
+        }
+    }
+    #[test]
+    fn test_parse_delta_metadata_vacuum_start() {
+        // TODO
+        let test_path =
+            Path::new("tests/data/delta/compacted/_delta_log/00000000000000000064.json");
+        let result = parse_delta_metadata(test_path);
+
+        match result {
+            Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
+            Err(e) => panic!("Failed to parse: {}", e),
+        }
+    }
+    #[test]
+    fn test_parse_delta_metadata_vacuum_end() {
+        // TODO
+        let test_path =
+            Path::new("tests/data/delta/compacted/_delta_log/00000000000000000065.json");
+        let result = parse_delta_metadata(test_path);
+
+        match result {
+            Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
+            Err(e) => panic!("Failed to parse: {}", e),
+        }
+    }
 }
