@@ -21,7 +21,7 @@ struct MetadataDeltaFormat {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MetadataDeltaOperationAdd {
+struct MetadataDeltaAdd {
     path: String,
     partition_values: HashMap<String, String>,
     size: u64,
@@ -36,21 +36,21 @@ struct MetadataDeltaOperationAdd {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MetadataDeltaOperationRemove {
+struct MetadataDeltaRemove {
     path: String,
     data_change: bool,
     deletion_timestamp: u64,
-    extended_file_metadata: bool,
+    extended_file_metadata: Option<bool>,
     partition_values: HashMap<String, String>,
     size: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum MetadataDeltaOperation {
-    Add(MetadataDeltaOperationAdd),
-    Remove(MetadataDeltaOperationRemove),
-}
+// #[derive(Debug, Deserialize, Serialize)]
+// #[serde(rename_all = "lowercase")]
+// enum MetadataDeltaOperation {
+//     Add(MetadataDeltaOperationAdd),
+//     Remove(MetadataDeltaOperationRemove),
+// }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct MetadataDeltaOperationMetricsAdd {
@@ -73,10 +73,25 @@ struct MetadataDeltaOperationMetricsRemove {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MetadataDeltaOperationMetricsOptimize {
+    files_added: String,
+    files_removed: String,
+    num_batches: u16,
+    num_files_added: u16,
+    num_files_removed: u16,
+    partitions_optimized: u16,
+    preserve_insertion_order: bool,
+    total_considered_files: u16,
+    total_files_skipped: u16,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum MetadataDeltaOperationMetrics {
     Add(MetadataDeltaOperationMetricsAdd),
     Remove(MetadataDeltaOperationMetricsRemove),
+    Optimize(MetadataDeltaOperationMetricsOptimize),
 }
 
 // TODO parse schema string, stats
@@ -88,6 +103,7 @@ struct MetadataDeltaCommit {
     operation_parameters: HashMap<String, String>,
     engine_info: String,
     operation_metrics: MetadataDeltaOperationMetrics,
+    read_version: u32,
     client_version: String,
 }
 
@@ -102,29 +118,24 @@ struct MetadataDeltaMetadata {
     partition_columns: Vec<String>,
 }
 
-#[derive(Deserialize)]
-struct ProtocolLine {
-    protocol: MetadataDeltaProtocol,
-}
-
-#[derive(Deserialize)]
-struct MetadataLine {
-    #[serde(rename = "metaData")]
-    metadata: MetadataDeltaMetadata,
-}
-
-#[derive(Deserialize)]
-struct CommitLine {
-    #[serde(rename = "commitInfo")]
-    commit: MetadataDeltaCommit,
-}
-
 #[derive(Debug, Deserialize, Serialize)]
-struct MetadataDelta {
+#[serde(rename_all = "camelCase")]
+enum DeltaAction {
+    Protocol(MetadataDeltaProtocol),
+    #[serde(rename = "metaData")]
+    Metadata(MetadataDeltaMetadata),
+    Add(MetadataDeltaAdd),
+    Remove(MetadataDeltaRemove),
+    CommitInfo(MetadataDeltaCommit),
+}
+
+#[derive(Debug, Default, Serialize)]
+struct DeltaLogFile {
     protocol: Option<MetadataDeltaProtocol>,
     metadata: Option<MetadataDeltaMetadata>,
-    operation: MetadataDeltaOperation,
-    commit: MetadataDeltaCommit,
+    adds: Vec<MetadataDeltaAdd>,
+    removes: Vec<MetadataDeltaRemove>,
+    commit_info: Option<MetadataDeltaCommit>,
 }
 
 fn read_lines(path: &Path) -> io::Result<Vec<String>> {
@@ -135,45 +146,38 @@ fn read_lines(path: &Path) -> io::Result<Vec<String>> {
     Ok(lines)
 }
 
-fn parse_delta_metadata(path: &Path) -> io::Result<MetadataDelta> {
+fn parse_delta_log(path: &Path) -> io::Result<DeltaLogFile> {
     let lines = read_lines(path)?;
-    if lines.len() == 2 {
-        let operation: MetadataDeltaOperation = serde_json::from_str(&lines[0])?;
-        let commit_line: CommitLine = serde_json::from_str(&lines[1])?;
+    let mut result = DeltaLogFile::default();
 
-        Ok(MetadataDelta {
-            protocol: None,
-            metadata: None,
-            operation: operation,
-            commit: commit_line.commit,
-        })
-    } else if lines.len() == 4 {
-        let protocol_line: ProtocolLine = serde_json::from_str(&lines[0])?;
-        let metadata_line: MetadataLine = serde_json::from_str(&lines[1])?;
-        let operation: MetadataDeltaOperation = serde_json::from_str(&lines[2])?;
-        let commit_line: CommitLine = serde_json::from_str(&lines[3])?;
+    for (line_num, line) in lines.iter().enumerate() {
+        let action: DeltaAction = serde_json::from_str(line).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to parse line {}: {}", line_num + 1, e),
+            )
+        })?;
 
-        Ok(MetadataDelta {
-            protocol: Some(protocol_line.protocol),
-            metadata: Some(metadata_line.metadata),
-            operation: operation,
-            commit: commit_line.commit,
-        })
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Expected 2 or 4 lines, got {}", lines.len()),
-        ))
+        match action {
+            DeltaAction::Protocol(p) => result.protocol = Some(p),
+            DeltaAction::Metadata(m) => result.metadata = Some(m),
+            DeltaAction::Add(a) => result.adds.push(a),
+            DeltaAction::Remove(r) => result.removes.push(r),
+            DeltaAction::CommitInfo(c) => result.commit_info = Some(c),
+        }
     }
+
+    Ok(result)
 }
+
 #[test_case("tests/data/delta/uniform/_delta_log/00000000000000000000.json" ; "add")]
 #[test_case("tests/data/delta/fragmented/_delta_log/00000000000000000052.json" ; "remove")]
 #[test_case("tests/data/delta/compacted/_delta_log/00000000000000000063.json" ; "optimize")]
 #[test_case("tests/data/delta/compacted/_delta_log/00000000000000000064.json" ; "vacuum_start")]
 #[test_case("tests/data/delta/compacted/_delta_log/00000000000000000065.json" ; "vacuum_end")]
-fn test_parse_delta_metadata(path: &str) {
+fn test_parse_delta_log(path: &str) {
     let test_path = Path::new(path);
-    let result = parse_delta_metadata(test_path);
+    let result = parse_delta_log(test_path);
 
     match result {
         Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
