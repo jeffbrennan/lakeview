@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json;
 use std::collections::HashMap;
 use std::fs::File;
@@ -19,6 +19,46 @@ struct StorageFormat {
     options: HashMap<String, String>,
 }
 
+// parse json strings
+fn deserialize_stats<'de, D: Deserializer<'de>>(deserializer: D) -> Result<FileStats, D::Error> {
+    let s: String = Deserialize::deserialize(deserializer)?;
+    serde_json::from_str(&s).map_err(serde::de::Error::custom)
+}
+
+fn serialize_stats<S: Serializer>(stats: &FileStats, serializer: S) -> Result<S::Ok, S::Error> {
+    let s = serde_json::to_string(stats).map_err(serde::ser::Error::custom)?;
+    serializer.serialize_str(&s)
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum StatValue {
+    Null,
+    Bool(bool),
+    Integer(i64),
+    Float(f64),
+    String(String),
+    Struct(HashMap<String, StatValue>),
+    Array(Vec<StatValue>),
+}
+
+/// null counts can be a number or nested for struct fields
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum NullCount {
+    Count(u64),
+    Nested(HashMap<String, NullCount>),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileStats {
+    num_records: u64,
+    min_values: HashMap<String, StatValue>,
+    max_values: HashMap<String, StatValue>,
+    null_count: HashMap<String, NullCount>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FileAdd {
@@ -27,7 +67,8 @@ struct FileAdd {
     size: u64,
     modification_time: u64,
     data_change: bool,
-    stats: String,
+    #[serde(deserialize_with = "deserialize_stats")]
+    stats: FileStats,
     tags: Option<String>,
     base_row_id: Option<String>,
     default_row_commit_version: Option<String>,
@@ -103,7 +144,6 @@ enum OperationMetrics {
     VacuumEnd(MetricsVacuumEnd),
 }
 
-// TODO parse schema string, stats
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CommitInfo {
@@ -117,13 +157,72 @@ struct CommitInfo {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+struct Schema {
+    #[serde(rename = "type")]
+    type_name: String,
+    fields: Vec<Field>,
+}
+
+/// recursive enum to handle all possible field types
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum FieldType {
+    Primitive(String),
+    Struct(StructType),
+    Array(ArrayType),
+    Map(MapType),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StructType {
+    #[serde(rename = "type")]
+    type_name: String,
+    fields: Vec<Field>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArrayType {
+    #[serde(rename = "type")]
+    type_name: String,
+    element_type: Box<FieldType>,
+    contains_null: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MapType {
+    #[serde(rename = "type")]
+    type_name: String,
+    key_type: Box<FieldType>,
+    value_type: Box<FieldType>,
+    value_contains_null: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Field {
+    name: String,
+    #[serde(rename = "type")]
+    field_type: FieldType,
+    nullable: bool,
+    metadata: HashMap<String, String>,
+}
+
+fn deserialize_schema<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Schema, D::Error> {
+    let s: String = Deserialize::deserialize(deserializer)?;
+    serde_json::from_str(&s).map_err(serde::de::Error::custom)
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Metadata {
     id: String,
     name: Option<String>,
     description: Option<String>,
     format: StorageFormat,
-    schema_string: String,
+    #[serde(rename = "schemaString", deserialize_with = "deserialize_schema")]
+    schema: Schema,
     partition_columns: Vec<String>,
 }
 
