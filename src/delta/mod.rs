@@ -94,12 +94,20 @@ struct MetadataDeltaOperationMetricsVacuumStart {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MetadataDeltaOperationMetricsVacuumEnd {
+    num_deleted_files: u16,
+    num_vacuumed_directories: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum MetadataDeltaOperationMetrics {
     Add(MetadataDeltaOperationMetricsAdd),
     Remove(MetadataDeltaOperationMetricsRemove),
     Optimize(MetadataDeltaOperationMetricsOptimize),
     VacuumStart(MetadataDeltaOperationMetricsVacuumStart),
+    VacuumEnd(MetadataDeltaOperationMetricsVacuumEnd),
 }
 
 // TODO parse schema string, stats
