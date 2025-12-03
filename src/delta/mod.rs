@@ -87,11 +87,19 @@ struct MetadataDeltaOperationMetricsOptimize {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MetadataDeltaOperationMetricsVacuumStart {
+    num_files_to_delete: u16,
+    size_of_data_to_delete: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum MetadataDeltaOperationMetrics {
     Add(MetadataDeltaOperationMetricsAdd),
     Remove(MetadataDeltaOperationMetricsRemove),
     Optimize(MetadataDeltaOperationMetricsOptimize),
+    VacuumStart(MetadataDeltaOperationMetricsVacuumStart),
 }
 
 // TODO parse schema string, stats
@@ -103,7 +111,7 @@ struct MetadataDeltaCommit {
     operation_parameters: HashMap<String, String>,
     engine_info: String,
     operation_metrics: MetadataDeltaOperationMetrics,
-    read_version: u32,
+    read_version: Option<u32>,
     client_version: String,
 }
 
