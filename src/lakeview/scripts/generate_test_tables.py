@@ -7,7 +7,6 @@ from deltalake import DeltaTable, write_deltalake
 
 
 def generate_sample_data(num_rows: int, batch_id: int = 0) -> pa.Table:
-    # Define the struct type for nested field
     address_type = pa.struct(
         [
             pa.field("country", pa.string()),
@@ -15,7 +14,6 @@ def generate_sample_data(num_rows: int, batch_id: int = 0) -> pa.Table:
         ]
     )
 
-    # Create nested data - each row gets an array of address structs
     nested_data = [
         [
             {"country": "USA", "zipcode": "12345"},
@@ -24,7 +22,7 @@ def generate_sample_data(num_rows: int, batch_id: int = 0) -> pa.Table:
         for _ in range(num_rows)
     ]
 
-    return pa.table(
+    table = pa.table(
         {
             "id": pa.array(
                 range(batch_id * num_rows, (batch_id + 1) * num_rows)
@@ -34,9 +32,23 @@ def generate_sample_data(num_rows: int, batch_id: int = 0) -> pa.Table:
             "amount": pa.array(
                 [float(i * 1.5) for i in range(num_rows)], type=pa.float64()
             ),
-            "nested": pa.array(nested_data, type=pa.list_(address_type)),
+            "addresses": pa.array(nested_data, type=pa.list_(address_type)),
+            "phone_number": pa.array(
+                [
+                    {"country_code": "+1", "number": f"555-{i:04d}"}
+                    for i in range(num_rows)
+                ],
+                type=pa.struct(
+                    [
+                        pa.field("country_code", pa.string()),
+                        pa.field("number", pa.string()),
+                    ]
+                ),
+            ),
         }
     )
+
+    return table
 
 
 def create_fragmented_table(
@@ -166,7 +178,19 @@ def create_partitioned_table(
                     [float(i * 1.5) for i in range(rows_per_partition)],
                     type=pa.float64(),
                 ),
-                "nested": pa.array(nested_data, type=pa.list_(address_type)),
+                "addresses": pa.array(nested_data, type=pa.list_(address_type)),
+                "phone_number": pa.array(
+                    [
+                        {"country_code": "+1", "number": f"555-{i:04d}"}
+                        for i in range(rows_per_partition)
+                    ],
+                    type=pa.struct(
+                        [
+                            pa.field("country_code", pa.string()),
+                            pa.field("number", pa.string()),
+                        ]
+                    ),
+                ),
             }
         )
         write_deltalake(
