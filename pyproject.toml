@@ -17,6 +17,7 @@ lakeview = "lakeview:main"
 [project.optional-dependencies]
 dev = [
     "deltalake>=1.2.1",
+    "polars>=1.35.2",
     "pyarrow>=22.0.0",
 ]
 
