@@ -7,6 +7,23 @@ from deltalake import DeltaTable, write_deltalake
 
 
 def generate_sample_data(num_rows: int, batch_id: int = 0) -> pa.Table:
+    # Define the struct type for nested field
+    address_type = pa.struct(
+        [
+            pa.field("country", pa.string()),
+            pa.field("zipcode", pa.string()),
+        ]
+    )
+
+    # Create nested data - each row gets an array of address structs
+    nested_data = [
+        [
+            {"country": "USA", "zipcode": "12345"},
+            {"country": "Canada", "zipcode": "A1B2C3"},
+        ]
+        for _ in range(num_rows)
+    ]
+
     return pa.table(
         {
             "id": pa.array(
@@ -17,12 +34,13 @@ def generate_sample_data(num_rows: int, batch_id: int = 0) -> pa.Table:
             "amount": pa.array(
                 [float(i * 1.5) for i in range(num_rows)], type=pa.float64()
             ),
+            "nested": pa.array(nested_data, type=pa.list_(address_type)),
         }
     )
 
 
 def create_fragmented_table(
-    base_path: Path, num_batches: int = 50, rows_per_batch: int = 100
+    base_path: Path, num_batches: int = 1000, rows_per_batch: int = 100
 ) -> Path:
     table_path = base_path / "fragmented"
     if table_path.exists():
@@ -34,7 +52,7 @@ def create_fragmented_table(
     # Write many small batches to create file fragmentation
     for batch_id in range(num_batches):
         data = generate_sample_data(rows_per_batch, batch_id)
-        write_deltalake(table_uri, data, mode="append")
+        write_deltalake(table_uri, data.to_reader(), mode="append")
 
     # Perform some delete operations to add tombstones
     dt = DeltaTable(table_uri)
@@ -51,7 +69,7 @@ def create_fragmented_table(
 
 
 def create_compacted_table(
-    base_path: Path, num_batches: int = 50, rows_per_batch: int = 100
+    base_path: Path, num_batches: int = 1000, rows_per_batch: int = 100
 ) -> Path:
     table_path = base_path / "compacted"
     if table_path.exists():
@@ -83,7 +101,7 @@ def create_compacted_table(
 
 
 def create_uniform_table(
-    base_path: Path, num_files: int = 10, rows_per_file: int = 10_000
+    base_path: Path, num_files: int = 100, rows_per_file: int = 10_000
 ) -> Path:
     table_path = base_path / "uniform"
     if table_path.exists():
@@ -116,6 +134,20 @@ def create_partitioned_table(
     table_uri = str(table_path)
 
     for partition_id in range(num_partitions):
+        address_type = pa.struct(
+            [
+                pa.field("country", pa.string()),
+                pa.field("zipcode", pa.string()),
+            ]
+        )
+
+        nested_data = [
+            [
+                {"country": "USA", "zipcode": "12345"},
+                {"country": "Canada", "zipcode": "A1B2C3"},
+            ]
+            for _ in range(rows_per_partition)
+        ]
         data = pa.table(
             {
                 "id": pa.array(
@@ -134,6 +166,7 @@ def create_partitioned_table(
                     [float(i * 1.5) for i in range(rows_per_partition)],
                     type=pa.float64(),
                 ),
+                "nested": pa.array(nested_data, type=pa.list_(address_type)),
             }
         )
         write_deltalake(
@@ -168,7 +201,7 @@ def main() -> None:
         "-o",
         "--output-dir",
         type=Path,
-        default=Path("tests/data"),
+        default=Path("tests/data/delta"),
         help="Output directory for generated tables (default: tests/data)",
     )
     parser.add_argument(
