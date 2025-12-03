@@ -140,6 +140,7 @@ enum DeltaAction {
 
 #[derive(Debug, Default, Serialize)]
 struct TransactionLog {
+    path: String,
     protocol: Option<Protocol>,
     metadata: Option<Metadata>,
     adds: Vec<FileAdd>,
@@ -157,7 +158,10 @@ fn read_lines(path: &Path) -> io::Result<Vec<String>> {
 
 fn parse_delta_log(path: &Path) -> io::Result<TransactionLog> {
     let lines = read_lines(path)?;
-    let mut result = TransactionLog::default();
+    let mut result = TransactionLog {
+        path: path.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
 
     for (line_num, line) in lines.iter().enumerate() {
         let action: DeltaAction = serde_json::from_str(line).map_err(|e| {
