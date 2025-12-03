@@ -8,6 +8,27 @@ use test_case::test_case;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+enum DeltaAction {
+    Protocol(Protocol),
+    #[serde(rename = "metaData")]
+    Metadata(Metadata),
+    Add(FileAdd),
+    Remove(FileRemove),
+    CommitInfo(CommitInfo),
+}
+
+#[derive(Debug, Default, Serialize)]
+struct TransactionLog {
+    path: String,
+    protocol: Option<Protocol>,
+    metadata: Option<Metadata>,
+    adds: Vec<FileAdd>,
+    removes: Vec<FileRemove>,
+    commit_info: Option<CommitInfo>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Protocol {
     min_reader_version: u8,
     min_writer_version: u8,
@@ -17,37 +38,6 @@ struct Protocol {
 struct StorageFormat {
     provider: String,
     options: HashMap<String, String>,
-}
-
-// parse json strings
-fn deserialize_stats<'de, D: Deserializer<'de>>(deserializer: D) -> Result<FileStats, D::Error> {
-    let s: String = Deserialize::deserialize(deserializer)?;
-    serde_json::from_str(&s).map_err(serde::de::Error::custom)
-}
-
-fn serialize_stats<S: Serializer>(stats: &FileStats, serializer: S) -> Result<S::Ok, S::Error> {
-    let s = serde_json::to_string(stats).map_err(serde::ser::Error::custom)?;
-    serializer.serialize_str(&s)
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum StatValue {
-    Null,
-    Bool(bool),
-    Integer(i64),
-    Float(f64),
-    String(String),
-    Struct(HashMap<String, StatValue>),
-    Array(Vec<StatValue>),
-}
-
-/// null counts can be a number or nested for struct fields
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum NullCount {
-    Count(u64),
-    Nested(HashMap<String, NullCount>),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -84,6 +74,26 @@ struct FileRemove {
     extended_file_metadata: Option<bool>,
     partition_values: HashMap<String, String>,
     size: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum StatValue {
+    Null,
+    Bool(bool),
+    Integer(i64),
+    Float(f64),
+    String(String),
+    Struct(HashMap<String, StatValue>),
+    Array(Vec<StatValue>),
+}
+
+/// null counts can be a number or nested for struct fields
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum NullCount {
+    Count(u64),
+    Nested(HashMap<String, NullCount>),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -157,6 +167,18 @@ struct CommitInfo {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Metadata {
+    id: String,
+    name: Option<String>,
+    description: Option<String>,
+    format: StorageFormat,
+    #[serde(rename = "schemaString", deserialize_with = "deserialize_schema")]
+    schema: Schema,
+    partition_columns: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct Schema {
     #[serde(rename = "type")]
     type_name: String,
@@ -209,44 +231,7 @@ struct Field {
     metadata: HashMap<String, String>,
 }
 
-fn deserialize_schema<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Schema, D::Error> {
-    let s: String = Deserialize::deserialize(deserializer)?;
-    serde_json::from_str(&s).map_err(serde::de::Error::custom)
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Metadata {
-    id: String,
-    name: Option<String>,
-    description: Option<String>,
-    format: StorageFormat,
-    #[serde(rename = "schemaString", deserialize_with = "deserialize_schema")]
-    schema: Schema,
-    partition_columns: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-enum DeltaAction {
-    Protocol(Protocol),
-    #[serde(rename = "metaData")]
-    Metadata(Metadata),
-    Add(FileAdd),
-    Remove(FileRemove),
-    CommitInfo(CommitInfo),
-}
-
-#[derive(Debug, Default, Serialize)]
-struct TransactionLog {
-    path: String,
-    protocol: Option<Protocol>,
-    metadata: Option<Metadata>,
-    adds: Vec<FileAdd>,
-    removes: Vec<FileRemove>,
-    commit_info: Option<CommitInfo>,
-}
-
+// primary funcs
 fn read_lines(path: &Path) -> io::Result<Vec<String>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
@@ -280,6 +265,17 @@ fn parse_delta_log(path: &Path) -> io::Result<TransactionLog> {
     }
 
     Ok(result)
+}
+
+// json string deserializers
+fn deserialize_stats<'de, D: Deserializer<'de>>(deserializer: D) -> Result<FileStats, D::Error> {
+    let s: String = Deserialize::deserialize(deserializer)?;
+    serde_json::from_str(&s).map_err(serde::de::Error::custom)
+}
+
+fn deserialize_schema<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Schema, D::Error> {
+    let s: String = Deserialize::deserialize(deserializer)?;
+    serde_json::from_str(&s).map_err(serde::de::Error::custom)
 }
 
 #[test_case("tests/data/delta/uniform/_delta_log/00000000000000000000.json" ; "add")]
