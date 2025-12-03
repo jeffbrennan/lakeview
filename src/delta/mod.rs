@@ -8,20 +8,20 @@ use test_case::test_case;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MetadataDeltaProtocol {
+struct DeltaProtocol {
     min_reader_version: u8,
     min_writer_version: u8,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct MetadataDeltaFormat {
+struct DeltaFormat {
     provider: String,
     options: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MetadataDeltaAdd {
+struct DeltaAdd {
     path: String,
     partition_values: HashMap<String, String>,
     size: u64,
@@ -36,7 +36,7 @@ struct MetadataDeltaAdd {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MetadataDeltaRemove {
+struct DeltaRemove {
     path: String,
     data_change: bool,
     deletion_timestamp: u64,
@@ -45,15 +45,8 @@ struct MetadataDeltaRemove {
     size: u64,
 }
 
-// #[derive(Debug, Deserialize, Serialize)]
-// #[serde(rename_all = "lowercase")]
-// enum MetadataDeltaOperation {
-//     Add(MetadataDeltaOperationAdd),
-//     Remove(MetadataDeltaOperationRemove),
-// }
-
 #[derive(Debug, Deserialize, Serialize)]
-struct MetadataDeltaOperationMetricsAdd {
+struct DeltaOperationMetricsAdd {
     execution_time_ms: u64,
     num_added_files: u16,
     num_added_rows: u64,
@@ -62,7 +55,7 @@ struct MetadataDeltaOperationMetricsAdd {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct MetadataDeltaOperationMetricsRemove {
+struct DeltaOperationMetricsRemove {
     execution_time_ms: u64,
     num_added_files: u16,
     num_copied_rows: u64,
@@ -74,7 +67,7 @@ struct MetadataDeltaOperationMetricsRemove {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MetadataDeltaOperationMetricsOptimize {
+struct DeltaOperationMetricsOptimize {
     files_added: String,
     files_removed: String,
     num_batches: u16,
@@ -88,48 +81,48 @@ struct MetadataDeltaOperationMetricsOptimize {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MetadataDeltaOperationMetricsVacuumStart {
+struct DeltaOperationMetricsVacuumStart {
     num_files_to_delete: u16,
     size_of_data_to_delete: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MetadataDeltaOperationMetricsVacuumEnd {
+struct DeltaOperationMetricsVacuumEnd {
     num_deleted_files: u16,
     num_vacuumed_directories: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
-enum MetadataDeltaOperationMetrics {
-    Add(MetadataDeltaOperationMetricsAdd),
-    Remove(MetadataDeltaOperationMetricsRemove),
-    Optimize(MetadataDeltaOperationMetricsOptimize),
-    VacuumStart(MetadataDeltaOperationMetricsVacuumStart),
-    VacuumEnd(MetadataDeltaOperationMetricsVacuumEnd),
+enum DeltaOperationMetrics {
+    Add(DeltaOperationMetricsAdd),
+    Remove(DeltaOperationMetricsRemove),
+    Optimize(DeltaOperationMetricsOptimize),
+    VacuumStart(DeltaOperationMetricsVacuumStart),
+    VacuumEnd(DeltaOperationMetricsVacuumEnd),
 }
 
 // TODO parse schema string, stats
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MetadataDeltaCommit {
+struct DeltaCommit {
     timestamp: u128,
     operation: String,
     operation_parameters: HashMap<String, String>,
     engine_info: String,
-    operation_metrics: MetadataDeltaOperationMetrics,
+    operation_metrics: DeltaOperationMetrics,
     read_version: Option<u32>,
     client_version: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MetadataDeltaMetadata {
+struct DeltaMetadata {
     id: String,
     name: Option<String>,
     description: Option<String>,
-    format: MetadataDeltaFormat,
+    format: DeltaFormat,
     schema_string: String,
     partition_columns: Vec<String>,
 }
@@ -137,21 +130,21 @@ struct MetadataDeltaMetadata {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum DeltaAction {
-    Protocol(MetadataDeltaProtocol),
+    Protocol(DeltaProtocol),
     #[serde(rename = "metaData")]
-    Metadata(MetadataDeltaMetadata),
-    Add(MetadataDeltaAdd),
-    Remove(MetadataDeltaRemove),
-    CommitInfo(MetadataDeltaCommit),
+    Metadata(DeltaMetadata),
+    Add(DeltaAdd),
+    Remove(DeltaRemove),
+    CommitInfo(DeltaCommit),
 }
 
 #[derive(Debug, Default, Serialize)]
 struct DeltaLogFile {
-    protocol: Option<MetadataDeltaProtocol>,
-    metadata: Option<MetadataDeltaMetadata>,
-    adds: Vec<MetadataDeltaAdd>,
-    removes: Vec<MetadataDeltaRemove>,
-    commit_info: Option<MetadataDeltaCommit>,
+    protocol: Option<DeltaProtocol>,
+    metadata: Option<DeltaMetadata>,
+    adds: Vec<DeltaAdd>,
+    removes: Vec<DeltaRemove>,
+    commit_info: Option<DeltaCommit>,
 }
 
 fn read_lines(path: &Path) -> io::Result<Vec<String>> {
