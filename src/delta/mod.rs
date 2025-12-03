@@ -8,20 +8,20 @@ use test_case::test_case;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DeltaProtocol {
+struct Protocol {
     min_reader_version: u8,
     min_writer_version: u8,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct DeltaFormat {
+struct StorageFormat {
     provider: String,
     options: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DeltaAdd {
+struct FileAdd {
     path: String,
     partition_values: HashMap<String, String>,
     size: u64,
@@ -36,7 +36,7 @@ struct DeltaAdd {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DeltaRemove {
+struct FileRemove {
     path: String,
     data_change: bool,
     deletion_timestamp: u64,
@@ -46,7 +46,7 @@ struct DeltaRemove {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct DeltaOperationMetricsAdd {
+struct MetricsWrite {
     execution_time_ms: u64,
     num_added_files: u16,
     num_added_rows: u64,
@@ -55,7 +55,7 @@ struct DeltaOperationMetricsAdd {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct DeltaOperationMetricsRemove {
+struct MetricsDelete {
     execution_time_ms: u64,
     num_added_files: u16,
     num_copied_rows: u64,
@@ -67,7 +67,7 @@ struct DeltaOperationMetricsRemove {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DeltaOperationMetricsOptimize {
+struct MetricsOptimize {
     files_added: String,
     files_removed: String,
     num_batches: u16,
@@ -81,48 +81,48 @@ struct DeltaOperationMetricsOptimize {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DeltaOperationMetricsVacuumStart {
+struct MetricsVacuumStart {
     num_files_to_delete: u16,
     size_of_data_to_delete: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DeltaOperationMetricsVacuumEnd {
+struct MetricsVacuumEnd {
     num_deleted_files: u16,
     num_vacuumed_directories: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
-enum DeltaOperationMetrics {
-    Add(DeltaOperationMetricsAdd),
-    Remove(DeltaOperationMetricsRemove),
-    Optimize(DeltaOperationMetricsOptimize),
-    VacuumStart(DeltaOperationMetricsVacuumStart),
-    VacuumEnd(DeltaOperationMetricsVacuumEnd),
+enum OperationMetrics {
+    Add(MetricsWrite),
+    Remove(MetricsDelete),
+    Optimize(MetricsOptimize),
+    VacuumStart(MetricsVacuumStart),
+    VacuumEnd(MetricsVacuumEnd),
 }
 
 // TODO parse schema string, stats
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DeltaCommit {
+struct CommitInfo {
     timestamp: u128,
     operation: String,
     operation_parameters: HashMap<String, String>,
     engine_info: String,
-    operation_metrics: DeltaOperationMetrics,
+    operation_metrics: OperationMetrics,
     read_version: Option<u32>,
     client_version: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DeltaMetadata {
+struct Metadata {
     id: String,
     name: Option<String>,
     description: Option<String>,
-    format: DeltaFormat,
+    format: StorageFormat,
     schema_string: String,
     partition_columns: Vec<String>,
 }
@@ -130,21 +130,21 @@ struct DeltaMetadata {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum DeltaAction {
-    Protocol(DeltaProtocol),
+    Protocol(Protocol),
     #[serde(rename = "metaData")]
-    Metadata(DeltaMetadata),
-    Add(DeltaAdd),
-    Remove(DeltaRemove),
-    CommitInfo(DeltaCommit),
+    Metadata(Metadata),
+    Add(FileAdd),
+    Remove(FileRemove),
+    CommitInfo(CommitInfo),
 }
 
 #[derive(Debug, Default, Serialize)]
-struct DeltaLogFile {
-    protocol: Option<DeltaProtocol>,
-    metadata: Option<DeltaMetadata>,
-    adds: Vec<DeltaAdd>,
-    removes: Vec<DeltaRemove>,
-    commit_info: Option<DeltaCommit>,
+struct TransactionLog {
+    protocol: Option<Protocol>,
+    metadata: Option<Metadata>,
+    adds: Vec<FileAdd>,
+    removes: Vec<FileRemove>,
+    commit_info: Option<CommitInfo>,
 }
 
 fn read_lines(path: &Path) -> io::Result<Vec<String>> {
@@ -155,9 +155,9 @@ fn read_lines(path: &Path) -> io::Result<Vec<String>> {
     Ok(lines)
 }
 
-fn parse_delta_log(path: &Path) -> io::Result<DeltaLogFile> {
+fn parse_delta_log(path: &Path) -> io::Result<TransactionLog> {
     let lines = read_lines(path)?;
-    let mut result = DeltaLogFile::default();
+    let mut result = TransactionLog::default();
 
     for (line_num, line) in lines.iter().enumerate() {
         let action: DeltaAction = serde_json::from_str(line).map_err(|e| {
