@@ -1,3 +1,7 @@
+# Lakeview
+
+Lakeview is a project intended to quickly summarize the file metadata of a given directory, providing the user information regarding the size, modification date, and operations done on various file formats (delta, iceberg, parquet). All file operations are handled in rust, with python bindings for creating visualizations of these summaries via maturin.
+
 # Rust coding guidelines
 
 * Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.
