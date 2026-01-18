@@ -53,23 +53,32 @@ fn main() {
                     return;
                 }
 
+                const BOLD: &str = "\x1b[1m";
+                const RESET: &str = "\x1b[0m";
+
                 for summary in summaries {
-                    println!("Table: {}", summary.path);
-                    println!("  Version:       {}", summary.version);
-                    println!("  Files:         {}", summary.num_files);
-                    if summary.last_modified > 0 {
-                        println!("  Last Modified: {}", format_timestamp(summary.last_modified));
-                    }
+                    let modified = if summary.last_modified > 0 {
+                        format!(" | {}", format_timestamp(summary.last_modified))
+                    } else {
+                        String::new()
+                    };
+                    println!(
+                        "{BOLD}{}{RESET} v{}{}",
+                        summary.path, summary.version, modified
+                    );
+                    println!("  {} files", summary.num_files);
                     if let Some(stats) = summary.file_size_stats {
-                        println!("  File Sizes:");
-                        println!("    Min:    {}", format_bytes(stats.min));
-                        println!("    25%:    {}", format_bytes(stats.p25));
-                        println!("    Median: {}", format_bytes(stats.median));
-                        println!("    75%:    {}", format_bytes(stats.p75));
-                        println!("    Max:    {}", format_bytes(stats.max));
-                        println!("    Mean:   {}", format_bytes(stats.mean as u64));
+                        println!(
+                            "  {BOLD}min:{RESET} {}, {BOLD}p25:{RESET} {}, {BOLD}median:{RESET} {}, {BOLD}p75:{RESET} {}, {BOLD}max:{RESET} {}, {BOLD}mean:{RESET} {}",
+                            format_bytes(stats.min),
+                            format_bytes(stats.p25),
+                            format_bytes(stats.median),
+                            format_bytes(stats.p75),
+                            format_bytes(stats.max),
+                            format_bytes(stats.mean as u64)
+                        );
                     }
-                    println!();
+                    println!("");
                 }
             }
             Err(e) => {
