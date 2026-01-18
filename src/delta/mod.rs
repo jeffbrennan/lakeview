@@ -351,6 +351,8 @@ pub struct TableSummary {
     pub num_files: usize,
     pub version: u64,
     pub last_modified: u64,
+    pub total_rows: u64,
+    pub total_size: u64,
     pub file_size_stats: Option<FileSizeStats>,
 }
 
@@ -428,6 +430,9 @@ pub fn summarize_tables(path: &Path, recursive: bool) -> io::Result<Vec<TableSum
             .max()
             .unwrap_or(0);
 
+        let total_rows: u64 = active_files.iter().map(|f| f.stats.num_records).sum();
+        let total_size: u64 = active_files.iter().map(|f| f.size).sum();
+
         let mut sizes: Vec<u64> = active_files.iter().map(|f| f.size).collect();
         let file_size_stats = compute_file_size_stats(&mut sizes);
 
@@ -436,6 +441,8 @@ pub fn summarize_tables(path: &Path, recursive: bool) -> io::Result<Vec<TableSum
             num_files,
             version,
             last_modified,
+            total_rows,
+            total_size,
             file_size_stats,
         });
     }

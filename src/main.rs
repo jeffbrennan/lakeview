@@ -211,29 +211,56 @@ fn main() {
                 const BOLD: &str = "\x1b[1m";
                 const RESET: &str = "\x1b[0m";
 
+                // Print header
+                println!(
+                    "{BOLD}table                          | version |  files | total_rows |  total_size |        min |        p25 |     median |        p75 |        max |       mean{RESET}"
+                );
+                println!(
+                    "-------------------------------|---------|--------|------------|-------------|------------|------------|------------|------------|------------|----------"
+                );
+
                 for summary in summaries {
-                    let modified = if summary.last_modified > 0 {
-                        format!(" | {}", format_timestamp(summary.last_modified))
+                    let (min, p25, median, p75, max, mean) =
+                        if let Some(stats) = &summary.file_size_stats {
+                            (
+                                format_bytes(stats.min),
+                                format_bytes(stats.p25),
+                                format_bytes(stats.median),
+                                format_bytes(stats.p75),
+                                format_bytes(stats.max),
+                                format_bytes(stats.mean as u64),
+                            )
+                        } else {
+                            (
+                                String::new(),
+                                String::new(),
+                                String::new(),
+                                String::new(),
+                                String::new(),
+                                String::new(),
+                            )
+                        };
+
+                    let table_name = if summary.path.len() > 30 {
+                        format!("...{}", &summary.path[summary.path.len() - 27..])
                     } else {
-                        String::new()
+                        summary.path.clone()
                     };
+
                     println!(
-                        "{BOLD}{}{RESET} v{}{}",
-                        summary.path, summary.version, modified
+                        "{:<30} | {:>7} | {:>6} | {:>10} | {:>11} | {:>10} | {:>10} | {:>10} | {:>10} | {:>10} | {:>10}",
+                        table_name,
+                        summary.version,
+                        summary.num_files,
+                        format_number(summary.total_rows as i64),
+                        format_bytes(summary.total_size),
+                        min,
+                        p25,
+                        median,
+                        p75,
+                        max,
+                        mean
                     );
-                    println!("  {} files", summary.num_files);
-                    if let Some(stats) = summary.file_size_stats {
-                        println!(
-                            "  {BOLD}min:{RESET} {}, {BOLD}p25:{RESET} {}, {BOLD}median:{RESET} {}, {BOLD}p75:{RESET} {}, {BOLD}max:{RESET} {}, {BOLD}mean:{RESET} {}",
-                            format_bytes(stats.min),
-                            format_bytes(stats.p25),
-                            format_bytes(stats.median),
-                            format_bytes(stats.p75),
-                            format_bytes(stats.max),
-                            format_bytes(stats.mean as u64)
-                        );
-                    }
-                    println!("");
                 }
             }
             Err(e) => {
