@@ -2,9 +2,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Error};
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use test_case::test_case;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -336,6 +335,112 @@ fn parse_directory(
     results
 }
 
+#[derive(Debug)]
+pub struct FileSizeStats {
+    pub min: u64,
+    pub p25: u64,
+    pub median: u64,
+    pub p75: u64,
+    pub max: u64,
+    pub mean: f64,
+}
+
+#[derive(Debug)]
+pub struct TableSummary {
+    pub path: String,
+    pub num_files: usize,
+    pub version: u64,
+    pub last_modified: u64,
+    pub file_size_stats: Option<FileSizeStats>,
+}
+
+fn percentile(sorted: &[u64], p: f64) -> u64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let idx = (p * (sorted.len() - 1) as f64).round() as usize;
+    sorted[idx.min(sorted.len() - 1)]
+}
+
+fn compute_file_size_stats(sizes: &mut Vec<u64>) -> Option<FileSizeStats> {
+    if sizes.is_empty() {
+        return None;
+    }
+    sizes.sort();
+    let sum: u64 = sizes.iter().sum();
+    Some(FileSizeStats {
+        min: sizes[0],
+        p25: percentile(sizes, 0.25),
+        median: percentile(sizes, 0.5),
+        p75: percentile(sizes, 0.75),
+        max: sizes[sizes.len() - 1],
+        mean: sum as f64 / sizes.len() as f64,
+    })
+}
+
+pub fn summarize_tables(path: &Path, recursive: bool) -> io::Result<Vec<TableSummary>> {
+    let delta_logs = find_delta_logs(path, recursive)?;
+    let mut summaries = Vec::new();
+
+    for delta_log in delta_logs {
+        let table_path = delta_log
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| delta_log.to_string_lossy().into_owned());
+
+        let json_files = get_json_files_from_delta_logs(&[delta_log.clone()])?;
+
+        // Parse version from filename (e.g., 00000000000000000052.json -> 52)
+        let version = json_files
+            .iter()
+            .filter_map(|p| {
+                p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+            })
+            .max()
+            .unwrap_or(0);
+
+        // Collect file info from all transaction logs
+        let mut all_adds: HashMap<String, FileAdd> = HashMap::new();
+        let mut removed_paths: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        for json_file in &json_files {
+            if let Ok(log) = parse_delta_log(json_file) {
+                for add in log.adds {
+                    all_adds.insert(add.path.clone(), add);
+                }
+                for remove in log.removes {
+                    removed_paths.insert(remove.path);
+                }
+            }
+        }
+
+        // Remove deleted files from adds
+        for removed in &removed_paths {
+            all_adds.remove(removed);
+        }
+
+        let active_files: Vec<_> = all_adds.into_values().collect();
+        let num_files = active_files.len();
+        let last_modified = active_files.iter().map(|f| f.modification_time).max().unwrap_or(0);
+
+        let mut sizes: Vec<u64> = active_files.iter().map(|f| f.size).collect();
+        let file_size_stats = compute_file_size_stats(&mut sizes);
+
+        summaries.push(TableSummary {
+            path: table_path,
+            num_files,
+            version,
+            last_modified,
+            file_size_stats,
+        });
+    }
+
+    Ok(summaries)
+}
+
 fn deserialize_stats<'de, D: Deserializer<'de>>(deserializer: D) -> Result<FileStats, D::Error> {
     let s: String = Deserialize::deserialize(deserializer)?;
     serde_json::from_str(&s).map_err(serde::de::Error::custom)
@@ -346,34 +451,47 @@ fn deserialize_schema<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Sche
     serde_json::from_str(&s).map_err(serde::de::Error::custom)
 }
 
-#[test_case("tests/data/delta/uniform/_delta_log/00000000000000000000.json" ; "add")]
-#[test_case("tests/data/delta/fragmented/_delta_log/00000000000000000052.json" ; "remove")]
-#[test_case("tests/data/delta/compacted/_delta_log/00000000000000000063.json" ; "optimize")]
-#[test_case("tests/data/delta/compacted/_delta_log/00000000000000000064.json" ; "vacuum_start")]
-#[test_case("tests/data/delta/compacted/_delta_log/00000000000000000065.json" ; "vacuum_end")]
-fn _test_parse_delta_log(path: &str) {
-    let test_path = Path::new(path);
-    let result = parse_delta_log(test_path);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_case::test_case;
 
-    match result {
-        Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
-        Err(e) => panic!("Failed to parse: {}", e),
+    #[test_case("tests/data/delta/uniform/_delta_log/00000000000000000000.json" ; "add")]
+    #[test_case("tests/data/delta/fragmented/_delta_log/00000000000000000052.json" ; "remove")]
+    #[test_case("tests/data/delta/compacted/_delta_log/00000000000000000063.json" ; "optimize")]
+    #[test_case("tests/data/delta/compacted/_delta_log/00000000000000000064.json" ; "vacuum_start")]
+    #[test_case("tests/data/delta/compacted/_delta_log/00000000000000000065.json" ; "vacuum_end")]
+    fn test_parse_delta_log(path: &str) {
+        let test_path = Path::new(path);
+        let result = parse_delta_log(test_path);
+
+        match result {
+            Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
+            Err(e) => panic!("Failed to parse: {}", e),
+        }
     }
-}
 
-#[test_case("tests/data/delta/", true, 4; "parent-dir-recursive")]
-#[test_case("tests/data/delta/", false, 0; "parent-dir-non-recursive")]
-#[test_case("tests/data/delta/uniform/", false, 1; "table-dir")]
-#[test_case("tests/data/delta/uniform/_delta_log/", false, 1; "delta-log-dir-direct")]
-fn _test_find_delta_logs(path: &str, recursive: bool, expected_count: usize) {
-    let test_path = Path::new(path);
-    let result = find_delta_logs(test_path, recursive).unwrap();
-    assert_eq!(
-        result.len(),
-        expected_count,
-        "Expected {} delta logs, found {}: {:?}",
-        expected_count,
-        result.len(),
-        result
-    );
+    #[test_case("tests/data/delta/", true; "multidir-recursive")]
+    #[test_case("tests/data/delta/", false; "multidir-non-recursive")]
+    fn test_parse_directory(path: &str, recursive: bool) {
+        let test_path = Path::new(path);
+        let _result = parse_directory(test_path, recursive);
+    }
+
+    #[test_case("tests/data/delta/", true, 4; "parent-dir-recursive")]
+    #[test_case("tests/data/delta/", false, 0; "parent-dir-non-recursive")]
+    #[test_case("tests/data/delta/uniform/", false, 1; "table-dir")]
+    #[test_case("tests/data/delta/uniform/_delta_log/", false, 1; "delta-log-dir-direct")]
+    fn test_find_delta_logs(path: &str, recursive: bool, expected_count: usize) {
+        let test_path = Path::new(path);
+        let result = find_delta_logs(test_path, recursive).unwrap();
+        assert_eq!(
+            result.len(),
+            expected_count,
+            "Expected {} delta logs, found {}: {:?}",
+            expected_count,
+            result.len(),
+            result
+        );
+    }
 }

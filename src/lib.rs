@@ -1,4 +1,4 @@
-mod delta;
+pub mod delta;
 
 use pyo3::prelude::*;
 #[pyfunction]
