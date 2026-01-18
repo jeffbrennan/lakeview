@@ -1,9 +1,9 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader};
-use std::path::Path;
+use std::fs;
+use std::io::{self, BufRead, BufReader, Error};
+use std::path::{Path, PathBuf};
 use test_case::test_case;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -231,9 +231,8 @@ struct Field {
     metadata: HashMap<String, String>,
 }
 
-// primary funcs
 fn read_lines(path: &Path) -> io::Result<Vec<String>> {
-    let file = File::open(path)?;
+    let file = fs::File::open(path)?;
     let reader = BufReader::new(file);
 
     let lines = reader.lines().collect::<std::result::Result<Vec<_>, _>>()?;
@@ -267,7 +266,76 @@ fn parse_delta_log(path: &Path) -> io::Result<TransactionLog> {
     Ok(result)
 }
 
-// json string deserializers
+fn find_delta_logs(path: impl AsRef<Path>, recursive: bool) -> std::io::Result<Vec<PathBuf>> {
+    let path = path.as_ref();
+    let mut delta_logs = vec![];
+
+    if path.is_dir() {
+        if let Some(name) = path.file_name() {
+            if name == "_delta_log" {
+                delta_logs.push(path.to_path_buf());
+                return Ok(delta_logs);
+            }
+        }
+    }
+
+    let entries = std::fs::read_dir(path)?;
+    for entry in entries {
+        let entry = entry?;
+        let entry_path = entry.path();
+
+        if entry_path.is_dir() {
+            if let Some(name) = entry_path.file_name() {
+                if name == "_delta_log" {
+                    delta_logs.push(entry_path);
+                } else if recursive {
+                    if let Ok(mut sub_logs) = find_delta_logs(&entry_path, recursive) {
+                        delta_logs.append(&mut sub_logs);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(delta_logs)
+}
+
+/// Collects all JSON files from the given `_delta_log` directories
+fn get_json_files_from_delta_logs(delta_logs: &[PathBuf]) -> std::io::Result<Vec<PathBuf>> {
+    let mut buf = vec![];
+
+    for delta_log in delta_logs {
+        let entries = std::fs::read_dir(delta_log)?;
+        for entry in entries {
+            let entry = entry?;
+            if entry.metadata()?.is_file() {
+                if let Some(ext) = entry.path().extension() {
+                    if ext == "json" {
+                        buf.push(entry.path());
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(buf)
+}
+
+fn parse_directory(
+    path: &Path,
+    recursive: bool,
+) -> HashMap<String, Result<TransactionLog, io::Error>> {
+    let delta_logs = find_delta_logs(path, recursive).unwrap_or_default();
+    let entries = get_json_files_from_delta_logs(&delta_logs).unwrap_or_default();
+
+    let mut results = HashMap::new();
+    for entry in entries {
+        let result = parse_delta_log(&entry);
+        results.insert(entry.to_string_lossy().into_owned(), result);
+    }
+    results
+}
+
 fn deserialize_stats<'de, D: Deserializer<'de>>(deserializer: D) -> Result<FileStats, D::Error> {
     let s: String = Deserialize::deserialize(deserializer)?;
     serde_json::from_str(&s).map_err(serde::de::Error::custom)
@@ -283,7 +351,7 @@ fn deserialize_schema<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Sche
 #[test_case("tests/data/delta/compacted/_delta_log/00000000000000000063.json" ; "optimize")]
 #[test_case("tests/data/delta/compacted/_delta_log/00000000000000000064.json" ; "vacuum_start")]
 #[test_case("tests/data/delta/compacted/_delta_log/00000000000000000065.json" ; "vacuum_end")]
-fn test_parse_delta_log(path: &str) {
+fn _test_parse_delta_log(path: &str) {
     let test_path = Path::new(path);
     let result = parse_delta_log(test_path);
 
@@ -291,4 +359,21 @@ fn test_parse_delta_log(path: &str) {
         Ok(metadata) => println!("{}", serde_json::to_string_pretty(&metadata).unwrap()),
         Err(e) => panic!("Failed to parse: {}", e),
     }
+}
+
+#[test_case("tests/data/delta/", true, 4; "parent-dir-recursive")]
+#[test_case("tests/data/delta/", false, 0; "parent-dir-non-recursive")]
+#[test_case("tests/data/delta/uniform/", false, 1; "table-dir")]
+#[test_case("tests/data/delta/uniform/_delta_log/", false, 1; "delta-log-dir-direct")]
+fn _test_find_delta_logs(path: &str, recursive: bool, expected_count: usize) {
+    let test_path = Path::new(path);
+    let result = find_delta_logs(test_path, recursive).unwrap();
+    assert_eq!(
+        result.len(),
+        expected_count,
+        "Expected {} delta logs, found {}: {:?}",
+        expected_count,
+        result.len(),
+        result
+    );
 }
