@@ -401,10 +401,8 @@ pub fn summarize_tables(path: &Path, recursive: bool) -> io::Result<Vec<TableSum
             .max()
             .unwrap_or(0);
 
-        // Collect file info from all transaction logs
         let mut all_adds: HashMap<String, FileAdd> = HashMap::new();
-        let mut removed_paths: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut removed_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for json_file in &json_files {
             if let Ok(log) = parse_delta_log(json_file) {
@@ -424,7 +422,11 @@ pub fn summarize_tables(path: &Path, recursive: bool) -> io::Result<Vec<TableSum
 
         let active_files: Vec<_> = all_adds.into_values().collect();
         let num_files = active_files.len();
-        let last_modified = active_files.iter().map(|f| f.modification_time).max().unwrap_or(0);
+        let last_modified = active_files
+            .iter()
+            .map(|f| f.modification_time)
+            .max()
+            .unwrap_or(0);
 
         let mut sizes: Vec<u64> = active_files.iter().map(|f| f.size).collect();
         let file_size_stats = compute_file_size_stats(&mut sizes);
@@ -439,6 +441,140 @@ pub fn summarize_tables(path: &Path, recursive: bool) -> io::Result<Vec<TableSum
     }
 
     Ok(summaries)
+}
+
+#[derive(Debug)]
+pub struct OperationRecord {
+    pub version: u64,
+    pub timestamp: u128,
+    pub operation: String,
+    pub rows_added: Option<u64>,
+    pub rows_deleted: Option<u64>,
+    pub rows_copied: Option<u64>,
+    pub files_added: Option<u16>,
+    pub files_removed: Option<u16>,
+    pub bytes_added: u64,
+    pub bytes_removed: u64,
+    pub total_rows: i64,
+    pub total_bytes: i64,
+}
+
+#[derive(Debug)]
+pub struct TableHistory {
+    pub path: String,
+    pub operations: Vec<OperationRecord>,
+}
+
+pub fn get_table_history(
+    path: &Path,
+    recursive: bool,
+    limit: Option<usize>,
+) -> io::Result<Vec<TableHistory>> {
+    let delta_logs = find_delta_logs(path, recursive)?;
+    let mut histories = Vec::new();
+
+    for delta_log in delta_logs {
+        let table_path = delta_log
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| delta_log.to_string_lossy().into_owned());
+
+        let mut json_files = get_json_files_from_delta_logs(&[delta_log.clone()])?;
+
+        json_files.sort_by(|a, b| {
+            let va = a
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let vb = b
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            va.cmp(&vb)
+        });
+
+        let mut operations = Vec::new();
+        let mut running_rows: i64 = 0;
+        let mut running_bytes: i64 = 0;
+
+        for json_file in &json_files {
+            let version = json_file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+
+            if let Ok(log) = parse_delta_log(json_file) {
+                let bytes_added: u64 = log.adds.iter().map(|f| f.size).sum();
+                let bytes_removed: u64 = log.removes.iter().map(|f| f.size).sum();
+
+                if let Some(commit) = log.commit_info {
+                    let (rows_added, rows_deleted, rows_copied, files_added, files_removed) =
+                        match commit.operation_metrics {
+                            OperationMetrics::Add(m) => (
+                                Some(m.num_added_rows),
+                                None,
+                                None,
+                                Some(m.num_added_files),
+                                Some(m.num_removed_files),
+                            ),
+                            OperationMetrics::Remove(m) => (
+                                None,
+                                Some(m.num_deleted_rows),
+                                Some(m.num_copied_rows),
+                                Some(m.num_added_files),
+                                Some(m.num_removed_files),
+                            ),
+                            OperationMetrics::Optimize(m) => (
+                                None,
+                                None,
+                                None,
+                                Some(m.num_files_added),
+                                Some(m.num_files_removed),
+                            ),
+                            OperationMetrics::VacuumStart(_) => (None, None, None, None, None),
+                            OperationMetrics::VacuumEnd(m) => {
+                                (None, None, None, None, Some(m.num_deleted_files))
+                            }
+                        };
+
+                    running_rows += rows_added.unwrap_or(0) as i64;
+                    running_rows -= rows_deleted.unwrap_or(0) as i64;
+                    running_bytes += bytes_added as i64;
+                    running_bytes -= bytes_removed as i64;
+
+                    operations.push(OperationRecord {
+                        version,
+                        timestamp: commit.timestamp,
+                        operation: commit.operation,
+                        rows_added,
+                        rows_deleted,
+                        rows_copied,
+                        files_added,
+                        files_removed,
+                        bytes_added,
+                        bytes_removed,
+                        total_rows: running_rows,
+                        total_bytes: running_bytes,
+                    });
+                }
+            }
+        }
+
+        operations.reverse();
+        if let Some(n) = limit {
+            operations.truncate(n);
+        }
+
+        histories.push(TableHistory {
+            path: table_path,
+            operations,
+        });
+    }
+
+    Ok(histories)
 }
 
 fn deserialize_stats<'de, D: Deserializer<'de>>(deserializer: D) -> Result<FileStats, D::Error> {

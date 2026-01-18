@@ -1,20 +1,23 @@
 use clap::Parser;
 use std::path::PathBuf;
 
-use _core::delta::summarize_tables;
+use _core::delta::{get_table_history, summarize_tables};
 
 #[derive(Parser)]
 #[command(name = "lakeview")]
 #[command(about = "A tool for inspecting Delta Lake tables")]
 struct Cli {
-    /// Path to scan for Delta tables
     path: PathBuf,
 
-    /// Print summary information for each table
     #[arg(long)]
     summary: bool,
 
-    /// Recursively scan directories
+    #[arg(long)]
+    history: bool,
+
+    #[arg(short, long, default_value = "10")]
+    limit: usize,
+
     #[arg(short, long)]
     recursive: bool,
 }
@@ -40,6 +43,21 @@ fn format_timestamp(ts_ms: u64) -> String {
     let d = UNIX_EPOCH + Duration::from_millis(ts_ms);
     let datetime: chrono::DateTime<chrono::Utc> = d.into();
     datetime.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+}
+
+fn format_number(n: i64) -> String {
+    let s = n.abs().to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    if n < 0 {
+        result.push('-');
+    }
+    result.chars().rev().collect()
 }
 
 fn main() {
@@ -86,7 +104,59 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    } else if cli.history {
+        match get_table_history(&cli.path, cli.recursive, Some(cli.limit)) {
+            Ok(histories) => {
+                if histories.is_empty() {
+                    eprintln!("No Delta tables found in {:?}", cli.path);
+                    return;
+                }
+
+                const BOLD: &str = "\x1b[1m";
+                const RESET: &str = "\x1b[0m";
+
+                for (i, history) in histories.iter().enumerate() {
+                    if i > 0 {
+                        println!();
+                    }
+                    println!("{BOLD}{}{RESET}", history.path);
+                    println!(
+                        "{BOLD}version | timestamp               | operation    | rows_added | rows_deleted | total_rows | total_size{RESET}"
+                    );
+                    println!(
+                        "--------|-------------------------|--------------|------------|--------------|------------|------------"
+                    );
+
+                    for op in &history.operations {
+                        let ts = format_timestamp(op.timestamp as u64);
+                        let rows_added = op
+                            .rows_added
+                            .map(|n| format_number(n as i64))
+                            .unwrap_or_default();
+                        let rows_deleted = op
+                            .rows_deleted
+                            .map(|n| format_number(n as i64))
+                            .unwrap_or_default();
+
+                        println!(
+                            "{:>7} | {} | {:>12} | {:>10} | {:>12} | {:>10} | {:>10}",
+                            op.version,
+                            ts,
+                            op.operation,
+                            rows_added,
+                            rows_deleted,
+                            format_number(op.total_rows),
+                            format_bytes(op.total_bytes.max(0) as u64)
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
     } else {
-        eprintln!("Please specify --summary to view table information");
+        eprintln!("Please specify --summary or --history to view table information");
     }
 }
