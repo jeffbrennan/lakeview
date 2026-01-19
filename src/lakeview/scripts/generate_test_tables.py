@@ -320,9 +320,10 @@ def main() -> None:
     print(f"Generating delta tables in: {args.output_dir.absolute()}")
     print("-" * 50)
 
+    n_tables = int(args.n_tables)
     if args.table_type == "all":
-        with ProcessPoolExecutor(max_workers=10) as executor:
-            table_list = [f"{i:02d}" for i in range(int(args.n_tables))]
+        with ProcessPoolExecutor(max_workers=min(10, n_tables)) as executor:
+            table_list = [f"{i:02d}" for i in range(n_tables)]
             executor.map(
                 create_all_tables,
                 table_list,
