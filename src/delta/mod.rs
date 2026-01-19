@@ -1,10 +1,12 @@
 use pyo3::{pyclass, pymethods};
+use rayon::prelude::*;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -302,23 +304,28 @@ fn find_delta_logs(path: impl AsRef<Path>, recursive: bool) -> std::io::Result<V
 
 /// Collects all JSON files from the given `_delta_log` directories
 fn get_json_files_from_delta_logs(delta_logs: &[PathBuf]) -> std::io::Result<Vec<PathBuf>> {
-    let mut buf = vec![];
-
-    for delta_log in delta_logs {
-        let entries = std::fs::read_dir(delta_log)?;
-        for entry in entries {
-            let entry = entry?;
-            if entry.metadata()?.is_file() {
-                if let Some(ext) = entry.path().extension() {
-                    if ext == "json" {
-                        buf.push(entry.path());
+    let files: Vec<PathBuf> = delta_logs
+        .par_iter()
+        .filter_map(|delta_log| {
+            let entries = std::fs::read_dir(delta_log).ok()?;
+            let json_files: Vec<PathBuf> = entries
+                .filter_map(|entry| {
+                    let entry = entry.ok()?;
+                    let path = entry.path();
+                    if entry.metadata().ok()?.is_file() {
+                        if path.extension()? == "json" {
+                            return Some(path);
+                        }
                     }
-                }
-            }
-        }
-    }
+                    None
+                })
+                .collect();
+            Some(json_files)
+        })
+        .flatten()
+        .collect();
 
-    Ok(buf)
+    Ok(files)
 }
 
 fn parse_directory(
@@ -404,19 +411,28 @@ pub fn summarize_tables(path: &Path, recursive: bool) -> io::Result<Vec<TableSum
             .max()
             .unwrap_or(0);
 
-        let mut all_adds: HashMap<String, FileAdd> = HashMap::new();
-        let mut removed_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let all_adds_mutex = Mutex::new(HashMap::new());
+        let removed_paths_mutex = Mutex::new(std::collections::HashSet::new());
 
-        for json_file in &json_files {
+        json_files.par_iter().for_each(|json_file| {
             if let Ok(log) = parse_delta_log(json_file) {
-                for add in log.adds {
-                    all_adds.insert(add.path.clone(), add);
+                if !log.adds.is_empty() {
+                    let mut all_adds = all_adds_mutex.lock().unwrap();
+                    for add in log.adds {
+                        all_adds.insert(add.path.clone(), add);
+                    }
                 }
-                for remove in log.removes {
-                    removed_paths.insert(remove.path);
+                if !log.removes.is_empty() {
+                    let mut removed_paths = removed_paths_mutex.lock().unwrap();
+                    for remove in log.removes {
+                        removed_paths.insert(remove.path);
+                    }
                 }
             }
-        }
+        });
+
+        let mut all_adds = all_adds_mutex.into_inner().unwrap();
+        let removed_paths = removed_paths_mutex.into_inner().unwrap();
 
         // Remove deleted files from adds
         for removed in &removed_paths {
@@ -557,72 +573,79 @@ pub fn get_table_history(
             va.cmp(&vb)
         });
 
+        // Parse logs in parallel, but preserve order
+        let parsed_logs: Vec<_> = json_files
+            .par_iter()
+            .filter_map(|json_file| {
+                let version = json_file
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
+
+                let log = parse_delta_log(json_file).ok()?;
+                let bytes_added: u64 = log.adds.iter().map(|f| f.size).sum();
+                let bytes_removed: u64 = log.removes.iter().map(|f| f.size).sum();
+
+                let commit = log.commit_info?;
+                Some((version, bytes_added, bytes_removed, commit))
+            })
+            .collect();
+
+        // Compute running totals sequentially
         let mut operations = Vec::new();
         let mut running_rows: i64 = 0;
         let mut running_bytes: i64 = 0;
 
-        for json_file in &json_files {
-            let version = json_file
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(0);
+        for (version, bytes_added, bytes_removed, commit) in parsed_logs {
+            let (rows_added, rows_deleted, rows_copied, files_added, files_removed) =
+                match commit.operation_metrics {
+                    OperationMetrics::Add(m) => (
+                        Some(m.num_added_rows),
+                        None,
+                        None,
+                        Some(m.num_added_files),
+                        Some(m.num_removed_files),
+                    ),
+                    OperationMetrics::Remove(m) => (
+                        None,
+                        Some(m.num_deleted_rows),
+                        Some(m.num_copied_rows),
+                        Some(m.num_added_files),
+                        Some(m.num_removed_files),
+                    ),
+                    OperationMetrics::Optimize(m) => (
+                        None,
+                        None,
+                        None,
+                        Some(m.num_files_added),
+                        Some(m.num_files_removed),
+                    ),
+                    OperationMetrics::VacuumStart(_) => (None, None, None, None, None),
+                    OperationMetrics::VacuumEnd(m) => {
+                        (None, None, None, None, Some(m.num_deleted_files))
+                    }
+                };
 
-            if let Ok(log) = parse_delta_log(json_file) {
-                let bytes_added: u64 = log.adds.iter().map(|f| f.size).sum();
-                let bytes_removed: u64 = log.removes.iter().map(|f| f.size).sum();
+            running_rows += rows_added.unwrap_or(0) as i64;
+            running_rows -= rows_deleted.unwrap_or(0) as i64;
+            running_bytes += bytes_added as i64;
+            running_bytes -= bytes_removed as i64;
 
-                if let Some(commit) = log.commit_info {
-                    let (rows_added, rows_deleted, rows_copied, files_added, files_removed) =
-                        match commit.operation_metrics {
-                            OperationMetrics::Add(m) => (
-                                Some(m.num_added_rows),
-                                None,
-                                None,
-                                Some(m.num_added_files),
-                                Some(m.num_removed_files),
-                            ),
-                            OperationMetrics::Remove(m) => (
-                                None,
-                                Some(m.num_deleted_rows),
-                                Some(m.num_copied_rows),
-                                Some(m.num_added_files),
-                                Some(m.num_removed_files),
-                            ),
-                            OperationMetrics::Optimize(m) => (
-                                None,
-                                None,
-                                None,
-                                Some(m.num_files_added),
-                                Some(m.num_files_removed),
-                            ),
-                            OperationMetrics::VacuumStart(_) => (None, None, None, None, None),
-                            OperationMetrics::VacuumEnd(m) => {
-                                (None, None, None, None, Some(m.num_deleted_files))
-                            }
-                        };
-
-                    running_rows += rows_added.unwrap_or(0) as i64;
-                    running_rows -= rows_deleted.unwrap_or(0) as i64;
-                    running_bytes += bytes_added as i64;
-                    running_bytes -= bytes_removed as i64;
-
-                    operations.push(OperationRecord {
-                        version,
-                        timestamp: commit.timestamp,
-                        operation: commit.operation,
-                        rows_added,
-                        rows_deleted,
-                        rows_copied,
-                        files_added,
-                        files_removed,
-                        bytes_added,
-                        bytes_removed,
-                        total_rows: running_rows,
-                        total_bytes: running_bytes,
-                    });
-                }
-            }
+            operations.push(OperationRecord {
+                version,
+                timestamp: commit.timestamp,
+                operation: commit.operation,
+                rows_added,
+                rows_deleted,
+                rows_copied,
+                files_added,
+                files_removed,
+                bytes_added,
+                bytes_removed,
+                total_rows: running_rows,
+                total_bytes: running_bytes,
+            });
         }
 
         operations.reverse();
