@@ -29,9 +29,7 @@ def generate_sample_data(num_rows: int, batch_id: int = 0) -> pa.Table:
 
     table = pa.table(
         {
-            "id": pa.array(
-                range(batch_id * num_rows, (batch_id + 1) * num_rows)
-            ),
+            "id": pa.array(range(batch_id * num_rows, (batch_id + 1) * num_rows)),
             "batch_id": pa.array([batch_id] * num_rows),
             "value": pa.array([f"value_{i}" for i in range(num_rows)]),
             "amount": pa.array(
@@ -123,9 +121,7 @@ def create_compacted_table(
 
     dt.optimize.compact()
 
-    dt.vacuum(
-        retention_hours=0, enforce_retention_duration=False, dry_run=False
-    )
+    dt.vacuum(retention_hours=0, enforce_retention_duration=False, dry_run=False)
 
     print(f"Created compacted table at {table_path}")
     print(f"  - Files: {len(dt.file_uris())}")
@@ -208,12 +204,8 @@ def create_partitioned_table(
                         (partition_id + 1) * rows_per_partition,
                     )
                 ),
-                "category": pa.array(
-                    [f"category_{partition_id}"] * rows_per_partition
-                ),
-                "value": pa.array(
-                    [f"value_{i}" for i in range(rows_per_partition)]
-                ),
+                "category": pa.array([f"category_{partition_id}"] * rows_per_partition),
+                "value": pa.array([f"value_{i}" for i in range(rows_per_partition)]),
                 "amount": pa.array(
                     [float(i * 1.5) for i in range(rows_per_partition)],
                     type=pa.float64(),
@@ -233,9 +225,7 @@ def create_partitioned_table(
                 ),
             }
         )
-        write_deltalake(
-            table_uri, data, mode="append", partition_by=["category"]
-        )
+        write_deltalake(table_uri, data, mode="append", partition_by=["category"])
 
     dt = DeltaTable(table_uri)
 
@@ -271,9 +261,7 @@ def create_all_tables(
         table_suffix=suffix,
         overwrite=overwrite,
     )
-    create_partitioned_table(
-        output_dir, table_suffix=suffix, overwrite=overwrite
-    )
+    create_partitioned_table(output_dir, table_suffix=suffix, overwrite=overwrite)
 
 
 def main() -> None:
