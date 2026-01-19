@@ -244,6 +244,7 @@ source = { editable = "." }
 dependencies = [
     { name = "dash" },
     { name = "dash-bootstrap-components" },
+    { name = "deltalake" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "plotly" },
@@ -262,6 +263,7 @@ dev = [
 requires-dist = [
     { name = "dash", specifier = ">=2.18.0" },
     { name = "dash-bootstrap-components", specifier = ">=1.6.0" },
+    { name = "deltalake", specifier = ">=1.2.1" },
     { name = "deltalake", marker = "extra == 'dev'", specifier = ">=1.2.1" },
     { name = "numpy", specifier = ">=2.4.1" },
     { name = "pandas", specifier = ">=2.3.3" },

@@ -15,6 +15,7 @@ dependencies = [
     "dash-bootstrap-components>=1.6.0",
     "pyarrow>=22.0.0",
     "pandas>=2.3.3",
+    "deltalake>=1.2.1",
 ]
 
 [project.scripts]
