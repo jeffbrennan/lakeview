@@ -62,10 +62,14 @@ def create_fragmented_table(
     num_batches: int = 1000,
     max_rows_per_batch: int = 100,
     table_suffix: str = "",
+    overwrite: bool = False,
 ) -> Path:
     table_path = base_path / f"fragmented{table_suffix}"
     if table_path.exists():
-        shutil.rmtree(table_path)
+        if overwrite:
+            shutil.rmtree(table_path)
+        else:
+            return table_path
     table_path.mkdir(parents=True)
 
     table_uri = str(table_path)
@@ -95,10 +99,14 @@ def create_compacted_table(
     num_batches: int = 100,
     max_rows_per_batch: int = 100,
     table_suffix: str = "",
+    overwrite: bool = False,
 ) -> Path:
     table_path = base_path / f"compacted{table_suffix}"
     if table_path.exists():
-        shutil.rmtree(table_path)
+        if overwrite:
+            shutil.rmtree(table_path)
+        else:
+            return table_path
     table_path.mkdir(parents=True)
 
     table_uri = str(table_path)
@@ -132,10 +140,15 @@ def create_uniform_table(
     num_files: int = 100,
     max_rows_per_file: int = 100,
     table_suffix: str = "",
+    overwrite: bool = False,
 ) -> Path:
     table_path = base_path / f"uniform{table_suffix}"
     if table_path.exists():
-        shutil.rmtree(table_path)
+        if overwrite:
+            shutil.rmtree(table_path)
+        else:
+            return table_path
+
     table_path.mkdir(parents=True)
 
     table_uri = str(table_path)
@@ -160,10 +173,14 @@ def create_partitioned_table(
     num_partitions: int = 5,
     max_rows_per_partition: int = 10_000,
     table_suffix: str = "",
+    overwrite: bool = False,
 ) -> Path:
     table_path = base_path / f"partitioned{table_suffix}"
     if table_path.exists():
-        shutil.rmtree(table_path)
+        if overwrite:
+            shutil.rmtree(table_path)
+        else:
+            return table_path
     table_path.mkdir(parents=True)
 
     table_uri = str(table_path)
@@ -230,19 +247,33 @@ def create_partitioned_table(
 
 
 def create_all_tables(
-    suffix: str, output_dir: Path, operation_limit: int
+    suffix: str,
+    output_dir: Path,
+    operation_limit: int,
+    overwrite: bool = False,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     create_fragmented_table(
-        output_dir, num_batches=operation_limit, table_suffix=suffix
+        output_dir,
+        num_batches=operation_limit,
+        table_suffix=suffix,
+        overwrite=overwrite,
     )
     create_compacted_table(
-        output_dir, num_batches=operation_limit, table_suffix=suffix
+        output_dir,
+        num_batches=operation_limit,
+        table_suffix=suffix,
+        overwrite=overwrite,
     )
     create_uniform_table(
-        output_dir, num_files=operation_limit, table_suffix=suffix
+        output_dir,
+        num_files=operation_limit,
+        table_suffix=suffix,
+        overwrite=overwrite,
     )
-    create_partitioned_table(output_dir, table_suffix=suffix)
+    create_partitioned_table(
+        output_dir, table_suffix=suffix, overwrite=overwrite
+    )
 
 
 def main() -> None:
@@ -278,6 +309,12 @@ def main() -> None:
         help="Number of operations",
     )
 
+    parser.add_argument(
+        "-f",
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing table",
+    )
     args = parser.parse_args()
 
     print(f"Generating delta tables in: {args.output_dir.absolute()}")
@@ -291,6 +328,7 @@ def main() -> None:
                 table_list,
                 repeat(args.output_dir),
                 repeat(int(args.operation_limit)),
+                repeat(args.overwrite),
             )
 
     elif args.table_type == "fragmented":
