@@ -62,16 +62,72 @@ def format_bytes(bytes_value) -> str:
         return f"{size:.2f} {units[unit_index]}"
 
 
-def load_data(max_tables=5):
-    histories = get_table_history_py("./tests/data/delta", True, None)
-    records = []
+def deserialize_dataframe(df_dicts):
+    if not df_dicts:
+        return pl.DataFrame()
 
-    # Limit to first N tables
-    for history in histories[:max_tables]:
-        records.extend(history.to_dict())
+    df = pl.from_dicts(df_dicts)
+
+    if "timestamp" in df.columns:
+        df = df.with_columns(
+            pl.col("timestamp").str.to_datetime().cast(pl.Datetime("ms"))
+        )
+
+    return df
+
+
+def get_all_table_info():
+    all_histories = get_table_history_py("./tests/data/delta", True, None)
+
+    all_table_paths = []
+    for history in all_histories:
+        if history.to_dict():
+            table_path = history.to_dict()[0]["table_path"]
+            all_table_paths.append(table_path)
+
+    all_table_names = []
+    if len(all_table_paths) > 1:
+        common_prefix = commonpath(all_table_paths)
+        if not common_prefix.endswith("/"):
+            common_prefix += "/"
+        if not common_prefix.startswith("./"):
+            common_prefix = "./" + common_prefix
+        all_table_names = [
+            path.replace(common_prefix, "", 1) for path in all_table_paths
+        ]
+    else:
+        all_table_names = [path.split("/")[-1] for path in all_table_paths]
+
+    return all_histories, all_table_names, all_table_paths
+
+
+def load_specific_tables(table_names_to_load):
+    """Load data for specific tables by their formatted names"""
+    all_histories, all_table_names, all_table_paths = get_all_table_info()
+
+    name_to_path = dict(zip(all_table_names, all_table_paths))
+
+    records = []
+    for table_name in table_names_to_load:
+        if table_name in name_to_path:
+            target_path = name_to_path[table_name]
+            for history in all_histories:
+                if (
+                    history.to_dict()
+                    and history.to_dict()[0]["table_path"] == target_path
+                ):
+                    records.extend(history.to_dict())
+                    break
+
+    if not records:
+        return pl.DataFrame()
 
     df = pl.DataFrame(records, infer_schema_length=None)
-    df = df.with_columns(pl.from_epoch("timestamp", time_unit="ms").alias("timestamp"))
+    df = df.with_columns(
+        pl.from_epoch("timestamp", time_unit="ms")
+        .cast(pl.Datetime("ms"))
+        .alias("timestamp")
+    )
 
     if not df.is_empty():
         paths = df["table_path"].unique().to_list()
@@ -83,14 +139,59 @@ def load_data(max_tables=5):
                 common_prefix = "./" + common_prefix
 
             df = df.with_columns(
-                pl.col("table_path").str.strip_prefix(common_prefix).alias("table_name")
+                pl.col("table_path")
+                .str.strip_prefix(common_prefix)
+                .alias("table_name")
             )
         else:
             df = df.with_columns(
-                pl.col("table_path").str.split("/").list.last().alias("table_name")
+                pl.col("table_path")
+                .str.split("/")
+                .list.last()
+                .alias("table_name")
             )
 
     return df
+
+
+def load_data(max_tables=5):
+    """Load initial data for the first N tables"""
+    all_histories, all_table_names, _ = get_all_table_info()
+
+    records = []
+    for history in all_histories[:max_tables]:
+        records.extend(history.to_dict())
+
+    df = pl.DataFrame(records, infer_schema_length=None)
+    df = df.with_columns(
+        pl.from_epoch("timestamp", time_unit="ms")
+        .cast(pl.Datetime("ms"))
+        .alias("timestamp")
+    )
+
+    if not df.is_empty():
+        paths = df["table_path"].unique().to_list()
+        if len(paths) > 1:
+            common_prefix = commonpath(paths)
+            if not common_prefix.endswith("/"):
+                common_prefix += "/"
+            if not common_prefix.startswith("./"):
+                common_prefix = "./" + common_prefix
+
+            df = df.with_columns(
+                pl.col("table_path")
+                .str.strip_prefix(common_prefix)
+                .alias("table_name")
+            )
+        else:
+            df = df.with_columns(
+                pl.col("table_path")
+                .str.split("/")
+                .list.last()
+                .alias("table_name")
+            )
+
+    return df, all_table_names
 
 
 def create_summary_stats(df):
@@ -135,17 +236,23 @@ def create_record_fig(df):
         showlegend=False,
         height=300 * num_tables,
     )
-    fig.update_xaxes(matches=None, showticklabels=True, gridcolor=PALETTE["muted"])
+    fig.update_xaxes(
+        matches=None, showticklabels=True, gridcolor=PALETTE["muted"]
+    )
     fig.update_yaxes(matches=None, gridcolor=PALETTE["muted"], title_text="")
     fig.for_each_annotation(
-        lambda a: a.update(text=a.text.split("=")[-1], font=dict(size=16, weight=700))
+        lambda a: a.update(
+            text=a.text.split("=")[-1], font=dict(size=16, weight=700)
+        )
     )
     return fig
 
 
 def create_size_fig(df):
     num_tables = df["table_name"].n_unique()
-    df_mb = df.with_columns((pl.col("total_bytes") / (1024 * 1024)).alias("total_mb"))
+    df_mb = df.with_columns(
+        (pl.col("total_bytes") / (1024 * 1024)).alias("total_mb")
+    )
     fig = px.line(
         df_mb,
         x="version",
@@ -166,10 +273,14 @@ def create_size_fig(df):
         showlegend=False,
         height=300 * num_tables,
     )
-    fig.update_xaxes(matches=None, showticklabels=True, gridcolor=PALETTE["muted"])
+    fig.update_xaxes(
+        matches=None, showticklabels=True, gridcolor=PALETTE["muted"]
+    )
     fig.update_yaxes(matches=None, gridcolor=PALETTE["muted"], title_text="")
     fig.for_each_annotation(
-        lambda a: a.update(text=a.text.split("=")[-1], font=dict(size=16, weight=700))
+        lambda a: a.update(
+            text=a.text.split("=")[-1], font=dict(size=16, weight=700)
+        )
     )
     return fig
 
@@ -228,10 +339,14 @@ def create_file_churn_fig(df):
         title_font_color=PALETTE["primary"],
         height=300 * num_tables,
     )
-    fig.update_xaxes(matches=None, showticklabels=True, gridcolor=PALETTE["muted"])
+    fig.update_xaxes(
+        matches=None, showticklabels=True, gridcolor=PALETTE["muted"]
+    )
     fig.update_yaxes(matches=None, gridcolor=PALETTE["muted"])
     fig.for_each_annotation(
-        lambda a: a.update(text=a.text.split("=")[-1], font=dict(size=16, weight=700))
+        lambda a: a.update(
+            text=a.text.split("=")[-1], font=dict(size=16, weight=700)
+        )
     )
     return fig
 
@@ -286,11 +401,11 @@ app = Dash(
     assets_folder=str(ASSETS_PATH),
 )
 
-df = load_data(max_tables=5)
+df, all_tables = load_data(max_tables=5)
 summary = create_summary_stats(df)
 
-# Get all unique table names for the filter
-all_tables = sorted(df["table_name"].unique().to_list())
+all_tables = sorted(all_tables)
+loaded_tables = sorted(df["table_name"].unique().to_list())
 
 app.layout = dbc.Container(
     [
@@ -327,7 +442,9 @@ app.layout = dbc.Container(
                                                         "background-color": PALETTE[
                                                             "background"
                                                         ],
-                                                        "color": PALETTE["text"],
+                                                        "color": PALETTE[
+                                                            "text"
+                                                        ],
                                                         "border-color": PALETTE[
                                                             "muted"
                                                         ],
@@ -351,14 +468,18 @@ app.layout = dbc.Container(
                                                 ),
                                             ],
                                             id="table-dropdown",
-                                            label=f"{len(all_tables)} tables selected",
+                                            label=f"{len(loaded_tables)} tables selected",
                                             style={
                                                 "width": "300px",
-                                                "background-color": PALETTE["surface"],
+                                                "background-color": PALETTE[
+                                                    "surface"
+                                                ],
                                                 "border-color": PALETTE["text"],
                                             },
                                             toggle_style={
-                                                "background-color": PALETTE["surface"],
+                                                "background-color": PALETTE[
+                                                    "surface"
+                                                ],
                                                 "color": PALETTE["text"],
                                                 "border-color": PALETTE["text"],
                                                 "min-height": "45px",
@@ -368,7 +489,14 @@ app.layout = dbc.Container(
                                             },
                                             className="custom-table-dropdown",
                                         ),
-                                        dcc.Store(id="table-filter", data=all_tables),
+                                        dcc.Store(
+                                            id="table-filter",
+                                            data=loaded_tables,
+                                        ),
+                                        dcc.Store(
+                                            id="dataframe-store",
+                                            data=df.to_dicts(),
+                                        ),
                                     ],
                                     style={"display": "inline-block"},
                                 ),
@@ -387,7 +515,9 @@ app.layout = dbc.Container(
             ],
             style={"margin-bottom": "20px"},
         ),
-        html.Hr(style={"border-color": PALETTE["muted"], "margin-bottom": "30px"}),
+        html.Hr(
+            style={"border-color": PALETTE["muted"], "margin-bottom": "30px"}
+        ),
         dbc.Row(
             [dbc.Col([html.Div(id="summary-table")])],
             className="mb-4",
@@ -409,7 +539,9 @@ app.layout = dbc.Container(
                     children=[
                         dbc.Row(
                             [
-                                dbc.Col([dcc.Graph(id="record-chart")], width=6),
+                                dbc.Col(
+                                    [dcc.Graph(id="record-chart")], width=6
+                                ),
                                 dbc.Col([dcc.Graph(id="size-chart")], width=6),
                             ],
                             className="mt-3",
@@ -472,6 +604,36 @@ app.layout = dbc.Container(
 
 
 @app.callback(
+    Output("dataframe-store", "data"),
+    Input("table-filter", "data"),
+    State("dataframe-store", "data"),
+)
+def load_selected_tables(selected_tables, current_df_dicts):
+    """Dynamically load data for selected tables"""
+    if not selected_tables:
+        return current_df_dicts
+
+    current_df = deserialize_dataframe(current_df_dicts)
+
+    loaded_tables_list = []
+    if not current_df.is_empty() and "table_name" in current_df.columns:
+        loaded_tables_list = current_df["table_name"].unique().to_list()
+
+    tables_to_load = [t for t in selected_tables if t not in loaded_tables_list]
+
+    if tables_to_load:
+        new_df = load_specific_tables(tables_to_load)
+
+        if not new_df.is_empty():
+            if current_df.is_empty():
+                current_df = new_df
+            else:
+                current_df = pl.concat([current_df, new_df], how="diagonal")
+
+    return current_df.to_dicts()
+
+
+@app.callback(
     Output("table-checklist-container", "children"),
     Input("table-search", "value"),
     Input("table-filter", "data"),
@@ -480,7 +642,9 @@ def update_checklist(search_value, selected_tables):
     """Populate the checklist with filtered tables"""
     filtered_tables = all_tables
     if search_value:
-        filtered_tables = [t for t in all_tables if search_value.lower() in t.lower()]
+        filtered_tables = [
+            t for t in all_tables if search_value.lower() in t.lower()
+        ]
 
     checklist_items = []
     for table in filtered_tables:
@@ -524,12 +688,13 @@ def update_selected_tables(
 ):
     """Update the store based on checkbox selections, preserving hidden selections"""
     if not checkbox_ids:
-        return all_tables
+        return loaded_tables
 
-    # Get currently visible tables based on search
     visible_tables = all_tables
     if search_value:
-        visible_tables = [t for t in all_tables if search_value.lower() in t.lower()]
+        visible_tables = [
+            t for t in all_tables if search_value.lower() in t.lower()
+        ]
 
     visible_selected = {
         checkbox_ids[i]["index"]
@@ -537,16 +702,13 @@ def update_selected_tables(
         if is_checked
     }
 
-    # Get tables that are not currently visible (filtered out by search)
     hidden_tables = set(all_tables) - set(visible_tables)
 
-    # Preserve selections for hidden tables
     hidden_selected = {t for t in current_selection if t in hidden_tables}
 
-    # Combine visible selections with preserved hidden selections
     all_selected = list(visible_selected | hidden_selected)
 
-    return all_selected if all_selected else all_tables
+    return all_selected if all_selected else loaded_tables
 
 
 @app.callback(Output("table-dropdown", "label"), Input("table-filter", "data"))
@@ -558,49 +720,82 @@ def update_dropdown_label(selected_tables):
     return f"{count} table{'s' if count != 1 else ''} selected"
 
 
-@app.callback(Output("summary-table", "children"), Input("table-filter", "data"))
-def update_summary_table(_):
-    # Always show all tables in summary, regardless of filter
+@app.callback(
+    Output("summary-table", "children"),
+    Input("table-filter", "data"),
+    Input("dataframe-store", "data"),
+)
+def update_summary_table(selected_tables, df_dicts):
+    if not df_dicts or not selected_tables:
+        return html.Div()
+    current_df = deserialize_dataframe(df_dicts)
+    filtered_df = current_df.filter(pl.col("table_name").is_in(selected_tables))
+    summary = create_summary_stats(filtered_df)
     return create_summary_table(summary)
 
 
-@app.callback(Output("record-chart", "figure"), Input("table-filter", "data"))
-def update_record_chart(selected_tables):
-    if not selected_tables:
+@app.callback(
+    Output("record-chart", "figure"),
+    Input("table-filter", "data"),
+    Input("dataframe-store", "data"),
+)
+def update_record_chart(selected_tables, df_dicts):
+    if not selected_tables or not df_dicts:
         return create_empty_figure()
-    filtered_df = df.filter(pl.col("table_name").is_in(selected_tables))
+    current_df = deserialize_dataframe(df_dicts)
+    filtered_df = current_df.filter(pl.col("table_name").is_in(selected_tables))
     return create_record_fig(filtered_df)
 
 
-@app.callback(Output("size-chart", "figure"), Input("table-filter", "data"))
-def update_size_chart(selected_tables):
-    if not selected_tables:
+@app.callback(
+    Output("size-chart", "figure"),
+    Input("table-filter", "data"),
+    Input("dataframe-store", "data"),
+)
+def update_size_chart(selected_tables, df_dicts):
+    if not selected_tables or not df_dicts:
         return create_empty_figure()
-    filtered_df = df.filter(pl.col("table_name").is_in(selected_tables))
+    current_df = deserialize_dataframe(df_dicts)
+    filtered_df = current_df.filter(pl.col("table_name").is_in(selected_tables))
     return create_size_fig(filtered_df)
 
 
-@app.callback(Output("operations-chart", "figure"), Input("table-filter", "data"))
-def update_operations_chart(selected_tables):
-    if not selected_tables:
+@app.callback(
+    Output("operations-chart", "figure"),
+    Input("table-filter", "data"),
+    Input("dataframe-store", "data"),
+)
+def update_operations_chart(selected_tables, df_dicts):
+    if not selected_tables or not df_dicts:
         return create_empty_figure()
-    filtered_df = df.filter(pl.col("table_name").is_in(selected_tables))
+    current_df = deserialize_dataframe(df_dicts)
+    filtered_df = current_df.filter(pl.col("table_name").is_in(selected_tables))
     return create_operation_breakdown(filtered_df)
 
 
-@app.callback(Output("file-churn-chart", "figure"), Input("table-filter", "data"))
-def update_file_churn_chart(selected_tables):
-    if not selected_tables:
+@app.callback(
+    Output("file-churn-chart", "figure"),
+    Input("table-filter", "data"),
+    Input("dataframe-store", "data"),
+)
+def update_file_churn_chart(selected_tables, df_dicts):
+    if not selected_tables or not df_dicts:
         return create_empty_figure()
-    filtered_df = df.filter(pl.col("table_name").is_in(selected_tables))
+    current_df = deserialize_dataframe(df_dicts)
+    filtered_df = current_df.filter(pl.col("table_name").is_in(selected_tables))
     return create_file_churn_fig(filtered_df)
 
 
-@app.callback(Output("timeline-chart", "figure"), Input("table-filter", "data"))
-def update_timeline_chart(selected_tables):
-    if not selected_tables:
+@app.callback(
+    Output("timeline-chart", "figure"),
+    Input("table-filter", "data"),
+    Input("dataframe-store", "data"),
+)
+def update_timeline_chart(selected_tables, df_dicts):
+    if not selected_tables or not df_dicts:
         return create_empty_figure()
-    filtered_df = df.filter(pl.col("table_name").is_in(selected_tables))
+    current_df = deserialize_dataframe(df_dicts)
+    filtered_df = current_df.filter(pl.col("table_name").is_in(selected_tables))
     return create_activity_timeline(filtered_df)
 
 
