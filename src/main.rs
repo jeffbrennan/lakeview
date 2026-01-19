@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use crossterm::{
     event::{self, Event, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -11,7 +11,15 @@ use ratatui::{
 use std::io::stdout;
 use std::path::PathBuf;
 
-use _core::delta::{get_table_history, summarize_tables};
+use _core::delta::{get_table_history_paginated, summarize_tables_paginated};
+
+#[derive(Debug, Clone, ValueEnum)]
+enum OperationType {
+    Write,
+    Delete,
+    Optimize,
+    Vacuum,
+}
 
 #[derive(Parser)]
 #[command(name = "lakeview")]
@@ -28,11 +36,20 @@ struct Cli {
     #[arg(long)]
     graph: bool,
 
-    #[arg(short, long, default_value = "10")]
-    limit: usize,
-
     #[arg(short, long)]
     recursive: bool,
+
+    #[arg(long, default_value = "20")]
+    n_operations: usize,
+
+    #[arg(short, long, default_value = "5")]
+    n_tables: usize,
+
+    #[arg(short, long, default_value = "1")]
+    page: usize,
+
+    #[arg(short, long, value_delimiter = ',')]
+    operations: Vec<OperationType>,
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -201,7 +218,12 @@ fn main() {
     let cli = Cli::parse();
 
     if cli.summary {
-        match summarize_tables(&cli.path, cli.recursive) {
+        match summarize_tables_paginated(
+            &cli.path,
+            cli.recursive,
+            Some(cli.n_tables),
+            Some(cli.page),
+        ) {
             Ok(summaries) => {
                 if summaries.is_empty() {
                     eprintln!("No Delta tables found in {:?}", cli.path);
@@ -269,7 +291,13 @@ fn main() {
             }
         }
     } else if cli.history {
-        match get_table_history(&cli.path, cli.recursive, Some(cli.limit)) {
+        match get_table_history_paginated(
+            &cli.path,
+            cli.recursive,
+            Some(cli.n_operations),
+            Some(cli.n_tables),
+            Some(cli.page),
+        ) {
             Ok(histories) => {
                 if histories.is_empty() {
                     eprintln!("No Delta tables found in {:?}", cli.path);
@@ -279,10 +307,40 @@ fn main() {
                 const BOLD: &str = "\x1b[1m";
                 const RESET: &str = "\x1b[0m";
 
-                for (i, history) in histories.iter().enumerate() {
-                    if i > 0 {
+                let mut tables_shown = 0;
+
+                for history in histories.iter() {
+                    let filtered_ops = if cli.operations.is_empty() {
+                        history.operations.iter().collect::<Vec<_>>()
+                    } else {
+                        history
+                            .operations
+                            .iter()
+                            .filter(|op| {
+                                let op_lower = op.operation.to_lowercase();
+                                cli.operations.iter().any(|filter_op| match filter_op {
+                                    OperationType::Write => {
+                                        op_lower.contains("write") || op_lower == "add"
+                                    }
+                                    OperationType::Delete => {
+                                        op_lower.contains("delete") || op_lower == "remove"
+                                    }
+                                    OperationType::Optimize => op_lower.contains("optimize"),
+                                    OperationType::Vacuum => op_lower.contains("vacuum"),
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    };
+
+                    if filtered_ops.is_empty() {
+                        continue;
+                    }
+
+                    if tables_shown > 0 {
                         println!();
                     }
+                    tables_shown += 1;
+
                     println!("{BOLD}{}{RESET}", history.path);
                     println!(
                         "{BOLD}version | timestamp               | operation    | rows_added | rows_deleted | total_rows | total_size{RESET}"
@@ -291,7 +349,7 @@ fn main() {
                         "--------|-------------------------|--------------|------------|--------------|------------|------------"
                     );
 
-                    for op in &history.operations {
+                    for op in filtered_ops {
                         let ts = format_timestamp(op.timestamp as u64);
                         let rows_added = op
                             .rows_added
@@ -321,8 +379,7 @@ fn main() {
             }
         }
     } else if cli.graph {
-        // For graph, we need all history to show the full picture
-        match get_table_history(&cli.path, cli.recursive, None) {
+        match get_table_history_paginated(&cli.path, cli.recursive, None, None, None) {
             Ok(histories) => {
                 if histories.is_empty() {
                     eprintln!("No Delta tables found in {:?}", cli.path);

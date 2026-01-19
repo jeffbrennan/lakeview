@@ -269,6 +269,14 @@ fn parse_delta_log(path: &Path) -> io::Result<TransactionLog> {
 }
 
 fn find_delta_logs(path: impl AsRef<Path>, recursive: bool) -> std::io::Result<Vec<PathBuf>> {
+    find_delta_logs_with_limit(path, recursive, None)
+}
+
+fn find_delta_logs_with_limit(
+    path: impl AsRef<Path>,
+    recursive: bool,
+    limit: Option<usize>,
+) -> std::io::Result<Vec<PathBuf>> {
     let path = path.as_ref();
     let mut delta_logs = vec![];
 
@@ -290,9 +298,23 @@ fn find_delta_logs(path: impl AsRef<Path>, recursive: bool) -> std::io::Result<V
             if let Some(name) = entry_path.file_name() {
                 if name == "_delta_log" {
                     delta_logs.push(entry_path);
+                    if let Some(lim) = limit {
+                        if delta_logs.len() >= lim {
+                            return Ok(delta_logs);
+                        }
+                    }
                 } else if recursive {
-                    if let Ok(mut sub_logs) = find_delta_logs(&entry_path, recursive) {
+                    if let Ok(mut sub_logs) = find_delta_logs_with_limit(
+                        &entry_path,
+                        recursive,
+                        limit.map(|lim| lim.saturating_sub(delta_logs.len())),
+                    ) {
                         delta_logs.append(&mut sub_logs);
+                        if let Some(lim) = limit {
+                            if delta_logs.len() >= lim {
+                                return Ok(delta_logs);
+                            }
+                        }
                     }
                 }
             }
@@ -389,7 +411,28 @@ fn compute_file_size_stats(sizes: &mut Vec<u64>) -> Option<FileSizeStats> {
 }
 
 pub fn summarize_tables(path: &Path, recursive: bool) -> io::Result<Vec<TableSummary>> {
-    let delta_logs = find_delta_logs(path, recursive)?;
+    summarize_tables_paginated(path, recursive, None, None)
+}
+
+pub fn summarize_tables_paginated(
+    path: &Path,
+    recursive: bool,
+    page_size: Option<usize>,
+    page: Option<usize>,
+) -> io::Result<Vec<TableSummary>> {
+    let delta_logs = if let (Some(size), Some(pg)) = (page_size, page) {
+        let skip = (pg.saturating_sub(1)) * size;
+        let limit = skip + size;
+        let all_logs = find_delta_logs_with_limit(path, recursive, Some(limit))?;
+        all_logs.into_iter().skip(skip).take(size).collect()
+    } else {
+        find_delta_logs(path, recursive)?
+    };
+
+    if delta_logs.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let mut summaries = Vec::new();
 
     for delta_log in delta_logs {
@@ -548,10 +591,28 @@ pub fn get_table_history(
     recursive: bool,
     limit: Option<usize>,
 ) -> io::Result<Vec<TableHistory>> {
-    let delta_logs = find_delta_logs(path, recursive)?;
+    get_table_history_paginated(path, recursive, limit, None, None)
+}
+
+pub fn get_table_history_paginated(
+    path: &Path,
+    recursive: bool,
+    limit: Option<usize>,
+    page_size: Option<usize>,
+    page: Option<usize>,
+) -> io::Result<Vec<TableHistory>> {
+    let delta_logs_to_process = if let (Some(size), Some(pg)) = (page_size, page) {
+        let skip = (pg.saturating_sub(1)) * size;
+        let max_logs = skip + size;
+        let all_logs = find_delta_logs_with_limit(path, recursive, Some(max_logs))?;
+        all_logs.into_iter().skip(skip).take(size).collect()
+    } else {
+        find_delta_logs(path, recursive)?
+    };
+
     let mut histories = Vec::new();
 
-    for delta_log in delta_logs {
+    for delta_log in delta_logs_to_process {
         let table_path = delta_log
             .parent()
             .map(|p| p.to_string_lossy().into_owned())
