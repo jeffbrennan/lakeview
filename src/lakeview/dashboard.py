@@ -1,11 +1,13 @@
-from genericpath import commonprefix
-import polars as pl
-import plotly.express as px
-from dash import Dash, dcc, html
-import dash_bootstrap_components as dbc
-from lakeview._core import get_table_history_py
-from pathlib import Path
 from os.path import commonpath
+from pathlib import Path
+
+import dash_bootstrap_components as dbc
+import plotly.express as px
+import plotly.graph_objects as go
+import polars as pl
+from dash import ALL, Dash, Input, Output, State, dcc, html
+
+from lakeview._core import get_table_history_py
 
 PALETTE = {
     "primary": "#e85740",
@@ -32,6 +34,19 @@ COLOR_SEQUENCE = [
 ]
 
 
+def create_empty_figure():
+    """Create an empty figure with just the background color"""
+    fig = go.Figure()
+    fig.update_layout(
+        paper_bgcolor=PALETTE["background"],
+        plot_bgcolor=PALETTE["surface"],
+        xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+        yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+        margin=dict(l=0, r=0, t=0, b=0),
+    )
+    return fig
+
+
 def format_bytes(bytes_value) -> str:
     units = ["B", "KiB", "MiB", "GiB", "TiB"]
     size = float(bytes_value)
@@ -47,10 +62,12 @@ def format_bytes(bytes_value) -> str:
         return f"{size:.2f} {units[unit_index]}"
 
 
-def load_data():
-    histories = get_table_history_py(".", True, None)
+def load_data(max_tables=5):
+    histories = get_table_history_py("./tests/data/delta", True, None)
     records = []
-    for history in histories:
+
+    # Limit to first N tables
+    for history in histories[:max_tables]:
         records.extend(history.to_dict())
 
     df = pl.DataFrame(records, infer_schema_length=None)
@@ -65,11 +82,8 @@ def load_data():
             if not common_prefix.startswith("./"):
                 common_prefix = "./" + common_prefix
 
-
             df = df.with_columns(
-                pl.col("table_path")
-                .str.strip_prefix(common_prefix)
-                .alias("table_name")
+                pl.col("table_path").str.strip_prefix(common_prefix).alias("table_name")
             )
         else:
             df = df.with_columns(
@@ -92,7 +106,9 @@ def create_summary_stats(df):
     summary_pd = summary.to_pandas()
     summary_pd["Records"] = summary_pd["Records"].apply(lambda x: f"{x:,}")
     summary_pd["Size"] = summary_pd["Size"].apply(format_bytes)
-    summary_pd["Last Updated"] = summary_pd["Last Updated"].dt.strftime("%a, %b %d, %Y %H:%m %p")
+    summary_pd["Last Updated"] = summary_pd["Last Updated"].dt.strftime(
+        "%a, %b %d, %Y %H:%m %p"
+    )
 
     return summary_pd
 
@@ -121,10 +137,9 @@ def create_record_fig(df):
     )
     fig.update_xaxes(matches=None, showticklabels=True, gridcolor=PALETTE["muted"])
     fig.update_yaxes(matches=None, gridcolor=PALETTE["muted"], title_text="")
-    fig.for_each_annotation(lambda a: a.update(
-        text=a.text.split("=")[-1],
-        font=dict(size=16, weight=700)
-    ))
+    fig.for_each_annotation(
+        lambda a: a.update(text=a.text.split("=")[-1], font=dict(size=16, weight=700))
+    )
     return fig
 
 
@@ -153,10 +168,9 @@ def create_size_fig(df):
     )
     fig.update_xaxes(matches=None, showticklabels=True, gridcolor=PALETTE["muted"])
     fig.update_yaxes(matches=None, gridcolor=PALETTE["muted"], title_text="")
-    fig.for_each_annotation(lambda a: a.update(
-        text=a.text.split("=")[-1],
-        font=dict(size=16, weight=700)
-    ))
+    fig.for_each_annotation(
+        lambda a: a.update(text=a.text.split("=")[-1], font=dict(size=16, weight=700))
+    )
     return fig
 
 
@@ -189,7 +203,10 @@ def create_operation_breakdown(df):
 def create_file_churn_fig(df):
     num_tables = df["table_name"].n_unique()
     df_churn = df.with_columns(
-        [pl.col("files_added").fill_null(0), pl.col("files_removed").fill_null(0)]
+        [
+            pl.col("files_added").fill_null(0),
+            pl.col("files_removed").fill_null(0),
+        ]
     )
 
     fig = px.bar(
@@ -213,10 +230,9 @@ def create_file_churn_fig(df):
     )
     fig.update_xaxes(matches=None, showticklabels=True, gridcolor=PALETTE["muted"])
     fig.update_yaxes(matches=None, gridcolor=PALETTE["muted"])
-    fig.for_each_annotation(lambda a: a.update(
-        text=a.text.split("=")[-1],
-        font=dict(size=16, weight=700)
-    ))
+    fig.for_each_annotation(
+        lambda a: a.update(text=a.text.split("=")[-1], font=dict(size=16, weight=700))
+    )
     return fig
 
 
@@ -255,7 +271,10 @@ def create_summary_table(summary_df):
         hover=True,
         responsive=True,
         className="mt-3",
-        style={"background-color": PALETTE["surface"], "color": PALETTE["text"]},
+        style={
+            "background-color": PALETTE["surface"],
+            "color": PALETTE["text"],
+        },
     )
 
 
@@ -267,8 +286,11 @@ app = Dash(
     assets_folder=str(ASSETS_PATH),
 )
 
-df = load_data()
+df = load_data(max_tables=5)
 summary = create_summary_stats(df)
+
+# Get all unique table names for the filter
+all_tables = sorted(df["table_name"].unique().to_list())
 
 app.layout = dbc.Container(
     [
@@ -279,14 +301,95 @@ app.layout = dbc.Container(
                         html.H1(
                             "lakeview",
                             className="mb-4 mt-4",
-                            style={"color": PALETTE["primary"], "font-weight": "700"},
+                            style={
+                                "color": PALETTE["primary"],
+                                "font-weight": "700",
+                            },
                         ),
-                    ]
-                )
-            ]
+                    ],
+                    width=6,
+                ),
+                dbc.Col(
+                    [
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        dbc.DropdownMenu(
+                                            [
+                                                dbc.Input(
+                                                    id="table-search",
+                                                    placeholder="Search tables...",
+                                                    type="text",
+                                                    style={
+                                                        "margin": "5px 10px",
+                                                        "width": "calc(100% - 20px)",
+                                                        "background-color": PALETTE[
+                                                            "background"
+                                                        ],
+                                                        "color": PALETTE["text"],
+                                                        "border-color": PALETTE[
+                                                            "muted"
+                                                        ],
+                                                    },
+                                                ),
+                                                html.Hr(
+                                                    style={
+                                                        "margin": "5px 0",
+                                                        "border-color": PALETTE[
+                                                            "muted"
+                                                        ],
+                                                    }
+                                                ),
+                                                html.Div(
+                                                    id="table-checklist-container",
+                                                    style={
+                                                        "max-height": "300px",
+                                                        "overflow-y": "auto",
+                                                        "padding": "5px",
+                                                    },
+                                                ),
+                                            ],
+                                            id="table-dropdown",
+                                            label=f"{len(all_tables)} tables selected",
+                                            style={
+                                                "width": "300px",
+                                                "background-color": PALETTE["surface"],
+                                                "border-color": PALETTE["text"],
+                                            },
+                                            toggle_style={
+                                                "background-color": PALETTE["surface"],
+                                                "color": PALETTE["text"],
+                                                "border-color": PALETTE["text"],
+                                                "min-height": "45px",
+                                                "width": "300px",
+                                                "text-align": "left",
+                                                "padding": "10px 15px",
+                                            },
+                                            className="custom-table-dropdown",
+                                        ),
+                                        dcc.Store(id="table-filter", data=all_tables),
+                                    ],
+                                    style={"display": "inline-block"},
+                                ),
+                            ],
+                            style={
+                                "display": "flex",
+                                "align-items": "center",
+                                "justify-content": "flex-end",
+                                "height": "100%",
+                                "padding-top": "20px",
+                            },
+                        )
+                    ],
+                    width=6,
+                ),
+            ],
+            style={"margin-bottom": "20px"},
         ),
+        html.Hr(style={"border-color": PALETTE["muted"], "margin-bottom": "30px"}),
         dbc.Row(
-            [dbc.Col([create_summary_table(summary)])],
+            [dbc.Col([html.Div(id="summary-table")])],
             className="mb-4",
             style={
                 "background-color": PALETTE["surface"],
@@ -306,12 +409,8 @@ app.layout = dbc.Container(
                     children=[
                         dbc.Row(
                             [
-                                dbc.Col(
-                                    [dcc.Graph(figure=create_record_fig(df))], width=6
-                                ),
-                                dbc.Col(
-                                    [dcc.Graph(figure=create_size_fig(df))], width=6
-                                ),
+                                dbc.Col([dcc.Graph(id="record-chart")], width=6),
+                                dbc.Col([dcc.Graph(id="size-chart")], width=6),
                             ],
                             className="mt-3",
                         )
@@ -328,7 +427,7 @@ app.layout = dbc.Container(
                         dbc.Row(
                             [
                                 dbc.Col(
-                                    [dcc.Graph(figure=create_operation_breakdown(df))],
+                                    [dcc.Graph(id="operations-chart")],
                                     width=12,
                                 )
                             ],
@@ -337,7 +436,7 @@ app.layout = dbc.Container(
                         dbc.Row(
                             [
                                 dbc.Col(
-                                    [dcc.Graph(figure=create_file_churn_fig(df))],
+                                    [dcc.Graph(id="file-churn-chart")],
                                     width=12,
                                 )
                             ],
@@ -356,7 +455,7 @@ app.layout = dbc.Container(
                         dbc.Row(
                             [
                                 dbc.Col(
-                                    [dcc.Graph(figure=create_activity_timeline(df))],
+                                    [dcc.Graph(id="timeline-chart")],
                                     width=12,
                                 )
                             ],
@@ -370,6 +469,139 @@ app.layout = dbc.Container(
     ],
     fluid=True,
 )
+
+
+@app.callback(
+    Output("table-checklist-container", "children"),
+    Input("table-search", "value"),
+    Input("table-filter", "data"),
+)
+def update_checklist(search_value, selected_tables):
+    """Populate the checklist with filtered tables"""
+    filtered_tables = all_tables
+    if search_value:
+        filtered_tables = [t for t in all_tables if search_value.lower() in t.lower()]
+
+    checklist_items = []
+    for table in filtered_tables:
+        is_checked = table in selected_tables
+        checklist_items.append(
+            dbc.Checkbox(
+                id={"type": "table-checkbox", "index": table},
+                label=table,
+                value=is_checked,
+                style={
+                    "color": PALETTE["text"],
+                    "padding": "5px 10px",
+                    "cursor": "pointer",
+                },
+                className="custom-checkbox",
+            )
+        )
+
+    if not checklist_items:
+        return html.Div(
+            "No tables found",
+            style={
+                "color": PALETTE["muted"],
+                "padding": "10px",
+                "text-align": "center",
+            },
+        )
+
+    return checklist_items
+
+
+@app.callback(
+    Output("table-filter", "data"),
+    Input({"type": "table-checkbox", "index": ALL}, "value"),
+    State({"type": "table-checkbox", "index": ALL}, "id"),
+    State("table-filter", "data"),
+    State("table-search", "value"),
+)
+def update_selected_tables(
+    checkbox_values, checkbox_ids, current_selection, search_value
+):
+    """Update the store based on checkbox selections, preserving hidden selections"""
+    if not checkbox_ids:
+        return all_tables
+
+    # Get currently visible tables based on search
+    visible_tables = all_tables
+    if search_value:
+        visible_tables = [t for t in all_tables if search_value.lower() in t.lower()]
+
+    visible_selected = {
+        checkbox_ids[i]["index"]
+        for i, is_checked in enumerate(checkbox_values)
+        if is_checked
+    }
+
+    # Get tables that are not currently visible (filtered out by search)
+    hidden_tables = set(all_tables) - set(visible_tables)
+
+    # Preserve selections for hidden tables
+    hidden_selected = {t for t in current_selection if t in hidden_tables}
+
+    # Combine visible selections with preserved hidden selections
+    all_selected = list(visible_selected | hidden_selected)
+
+    return all_selected if all_selected else all_tables
+
+
+@app.callback(Output("table-dropdown", "label"), Input("table-filter", "data"))
+def update_dropdown_label(selected_tables):
+    """Update the dropdown button label with selection count"""
+    if not selected_tables:
+        return "No tables selected"
+    count = len(selected_tables)
+    return f"{count} table{'s' if count != 1 else ''} selected"
+
+
+@app.callback(Output("summary-table", "children"), Input("table-filter", "data"))
+def update_summary_table(_):
+    # Always show all tables in summary, regardless of filter
+    return create_summary_table(summary)
+
+
+@app.callback(Output("record-chart", "figure"), Input("table-filter", "data"))
+def update_record_chart(selected_tables):
+    if not selected_tables:
+        return create_empty_figure()
+    filtered_df = df.filter(pl.col("table_name").is_in(selected_tables))
+    return create_record_fig(filtered_df)
+
+
+@app.callback(Output("size-chart", "figure"), Input("table-filter", "data"))
+def update_size_chart(selected_tables):
+    if not selected_tables:
+        return create_empty_figure()
+    filtered_df = df.filter(pl.col("table_name").is_in(selected_tables))
+    return create_size_fig(filtered_df)
+
+
+@app.callback(Output("operations-chart", "figure"), Input("table-filter", "data"))
+def update_operations_chart(selected_tables):
+    if not selected_tables:
+        return create_empty_figure()
+    filtered_df = df.filter(pl.col("table_name").is_in(selected_tables))
+    return create_operation_breakdown(filtered_df)
+
+
+@app.callback(Output("file-churn-chart", "figure"), Input("table-filter", "data"))
+def update_file_churn_chart(selected_tables):
+    if not selected_tables:
+        return create_empty_figure()
+    filtered_df = df.filter(pl.col("table_name").is_in(selected_tables))
+    return create_file_churn_fig(filtered_df)
+
+
+@app.callback(Output("timeline-chart", "figure"), Input("table-filter", "data"))
+def update_timeline_chart(selected_tables):
+    if not selected_tables:
+        return create_empty_figure()
+    filtered_df = df.filter(pl.col("table_name").is_in(selected_tables))
+    return create_activity_timeline(filtered_df)
 
 
 if __name__ == "__main__":
