@@ -1,3 +1,4 @@
+use pyo3::{pyclass, pymethods};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json;
 use std::collections::HashMap;
@@ -450,26 +451,80 @@ pub fn summarize_tables(path: &Path, recursive: bool) -> io::Result<Vec<TableSum
     Ok(summaries)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[pyclass]
 pub struct OperationRecord {
+    #[pyo3(get)]
     pub version: u64,
+    #[pyo3(get)]
     pub timestamp: u128,
+    #[pyo3(get)]
     pub operation: String,
+    #[pyo3(get)]
     pub rows_added: Option<u64>,
+    #[pyo3(get)]
     pub rows_deleted: Option<u64>,
+    #[pyo3(get)]
     pub rows_copied: Option<u64>,
+    #[pyo3(get)]
     pub files_added: Option<u16>,
+    #[pyo3(get)]
     pub files_removed: Option<u16>,
+    #[pyo3(get)]
     pub bytes_added: u64,
+    #[pyo3(get)]
     pub bytes_removed: u64,
+    #[pyo3(get)]
     pub total_rows: i64,
+    #[pyo3(get)]
     pub total_bytes: i64,
 }
 
-#[derive(Debug)]
+#[pymethods]
+impl OperationRecord {
+    fn __repr__(&self) -> String {
+        format!(
+            "OperationRecord(version={}, operation='{}', total_rows={})",
+            self.version, self.operation, self.total_rows
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+#[pyclass]
 pub struct TableHistory {
+    #[pyo3(get)]
     pub path: String,
+    #[pyo3(get)]
     pub operations: Vec<OperationRecord>,
+}
+
+#[pymethods]
+impl TableHistory {
+    fn to_dict(&self, py: pyo3::Python) -> Vec<HashMap<String, pyo3::PyObject>> {
+        use pyo3::ToPyObject;
+
+        self.operations
+            .iter()
+            .map(|op| {
+                let mut row = HashMap::new();
+                row.insert("table_path".to_string(), self.path.to_object(py));
+                row.insert("version".to_string(), op.version.to_object(py));
+                row.insert("timestamp".to_string(), (op.timestamp as u64).to_object(py));
+                row.insert("operation".to_string(), op.operation.to_object(py));
+                row.insert("rows_added".to_string(), op.rows_added.to_object(py));
+                row.insert("rows_deleted".to_string(), op.rows_deleted.to_object(py));
+                row.insert("rows_copied".to_string(), op.rows_copied.to_object(py));
+                row.insert("files_added".to_string(), op.files_added.to_object(py));
+                row.insert("files_removed".to_string(), op.files_removed.to_object(py));
+                row.insert("bytes_added".to_string(), op.bytes_added.to_object(py));
+                row.insert("bytes_removed".to_string(), op.bytes_removed.to_object(py));
+                row.insert("total_rows".to_string(), op.total_rows.to_object(py));
+                row.insert("total_bytes".to_string(), op.total_bytes.to_object(py));
+                row
+            })
+            .collect()
+    }
 }
 
 pub fn get_table_history(

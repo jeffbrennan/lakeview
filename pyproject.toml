@@ -8,7 +8,14 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "numpy>=2.4.1",
     "plotly>=6.5.0",
+    "polars>=1.35.2",
+    "dash>=2.18.0",
+    "dash-bootstrap-components>=1.6.0",
+    "pyarrow>=22.0.0",
+    "pandas>=2.3.3",
+    "deltalake>=1.2.1",
 ]
 
 [project.scripts]

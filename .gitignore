@@ -2,3 +2,4 @@ target/
 *.so
 *.pyc
 tests/data/
+.DS_Store
