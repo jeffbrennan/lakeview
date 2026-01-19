@@ -1,0 +1,80 @@
+body {
+    background: linear-gradient(135deg, #1d2021 0%, #282828 100%);
+    min-height: 100vh;
+}
+
+h1, h2, h3 {
+    color: #e85740 !important;
+    font-weight: 600;
+}
+
+.tab-content {
+    background-color: #282828;
+    border-radius: 8px;
+    padding: 20px;
+    margin-top: 10px;
+}
+
+.nav-tabs .nav-link {
+    color: #ebdbb2;
+    background-color: #1d2021;
+    border: 1px solid #928374;
+}
+
+.nav-tabs .nav-link:hover {
+    color: #e85740;
+    background-color: #282828;
+}
+
+.nav-tabs .nav-link.active {
+    color: #e85740;
+    background-color: #282828;
+    border-color: #e85740;
+}
+
+.table {
+    background-color: #282828 !important;
+    color: #ebdbb2 !important;
+    border-color: #928374 !important;
+}
+
+.table thead th {
+    background-color: #1d2021 !important;
+    color: #e85740 !important;
+    border-color: #928374 !important;
+    font-weight: 600;
+}
+
+.table td, .table th {
+    border-color: #928374 !important;
+    color: #ebdbb2 !important;
+}
+
+.table tbody td {
+    background-color: #282828 !important;
+}
+
+.table-striped tbody tr:nth-of-type(odd) td {
+    background-color: #1d2021 !important;
+}
+
+.table-striped tbody tr:nth-of-type(even) td {
+    background-color: #282828 !important;
+}
+
+.table-hover tbody tr:hover td {
+    background-color: #3c3836 !important;
+    color: #fabd2f !important;
+}
+
+.table-bordered {
+    border: 1px solid #928374 !important;
+}
+
+.container-fluid {
+    background-color: transparent;
+}
+
+hr {
+    border-color: #928374;
+}

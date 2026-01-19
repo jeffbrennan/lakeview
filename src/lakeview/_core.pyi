@@ -1,9 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-
 def hello_from_bin() -> str: ...
-
 @dataclass
 class OperationRecord:
     version: int
@@ -25,4 +23,6 @@ class TableHistory:
 
     def to_dict(self) -> list[dict[str, Any]]: ...
 
-def get_table_history_py(path: str, recursive: bool, limit: int | None = 10) -> list[TableHistory]: ...
+def get_table_history_py(
+    path: str, recursive: bool, limit: int | None = None
+) -> list[TableHistory]: ...

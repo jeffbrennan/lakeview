@@ -11,9 +11,7 @@ def main() -> None:
 
     df = pl.DataFrame(records, infer_schema_length=None)
 
-    df = df.with_columns(
-        pl.from_epoch("timestamp", time_unit="ms").alias("timestamp")
-    )
+    df = df.with_columns(pl.from_epoch("timestamp", time_unit="ms").alias("timestamp"))
     fig = px.line(
         df,
         x="version",
@@ -21,13 +19,14 @@ def main() -> None:
         color="table_path",
         facet_col="table_path",
         facet_col_wrap=1,
-        template="ggplot2"
+        template="ggplot2",
     )
 
     fig.update_xaxes(matches=None, showticklabels=True)
     fig.update_yaxes(matches=None)
 
     fig.show()
+
 
 if __name__ == "__main__":
     main()
