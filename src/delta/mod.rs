@@ -1,3 +1,7 @@
+use arrow::array::{Array, AsArray};
+use arrow::datatypes::Int64Type;
+use arrow::record_batch::RecordBatch;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use pyo3::{pyclass, pymethods};
 use rayon::prelude::*;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -233,6 +237,159 @@ struct Field {
     metadata: HashMap<String, String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CheckpointMetadata {
+    version: u64,
+    size: Option<u64>,
+    size_in_bytes: Option<u64>,
+    num_of_add_files: Option<u64>,
+}
+
+fn read_checkpoint_metadata(delta_log: &Path) -> io::Result<Option<CheckpointMetadata>> {
+    let checkpoint_file = delta_log.join("_last_checkpoint");
+    if !checkpoint_file.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(checkpoint_file)?;
+    let metadata: CheckpointMetadata = serde_json::from_str(&content)?;
+    Ok(Some(metadata))
+}
+
+fn read_checkpoint_parquet(delta_log: &Path, version: u64) -> io::Result<HashMap<String, FileAdd>> {
+    let checkpoint_path = delta_log.join(format!("{:020}.checkpoint.parquet", version));
+
+    if !checkpoint_path.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let file = fs::File::open(&checkpoint_path)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut reader = builder
+        .build()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let mut active_files = HashMap::new();
+
+    while let Some(batch_result) = reader.next() {
+        let batch = batch_result.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        if let Err(e) = process_checkpoint_batch(&batch, &mut active_files) {
+            eprintln!("Warning: failed to process checkpoint batch: {}", e);
+        }
+    }
+
+    Ok(active_files)
+}
+
+fn process_checkpoint_batch(
+    batch: &RecordBatch,
+    active_files: &mut HashMap<String, FileAdd>,
+) -> io::Result<()> {
+    let schema = batch.schema();
+
+    let add_column_idx = schema.column_with_name("add").map(|(idx, _)| idx);
+    let remove_column_idx = schema.column_with_name("remove").map(|(idx, _)| idx);
+
+    if let Some(idx) = add_column_idx {
+        if let Some(add_array) = batch.column(idx).as_struct_opt() {
+            let path_array = add_array
+                .column_by_name("path")
+                .and_then(|col| col.as_string_opt::<i32>());
+            let size_array = add_array
+                .column_by_name("size")
+                .and_then(|col| col.as_primitive_opt::<Int64Type>());
+            let modification_time_array = add_array
+                .column_by_name("modificationTime")
+                .and_then(|col| col.as_primitive_opt::<Int64Type>());
+
+            if let (Some(paths), Some(sizes), Some(mod_times)) =
+                (path_array, size_array, modification_time_array)
+            {
+                for i in 0..batch.num_rows() {
+                    if paths.is_null(i) {
+                        continue;
+                    }
+
+                    let path = paths.value(i).to_string();
+                    let size = if sizes.is_null(i) {
+                        0
+                    } else {
+                        sizes.value(i) as u64
+                    };
+                    let mod_time = if mod_times.is_null(i) {
+                        0
+                    } else {
+                        mod_times.value(i) as u64
+                    };
+
+                    let stats_json = add_array
+                        .column_by_name("stats")
+                        .and_then(|col| col.as_string_opt::<i32>())
+                        .and_then(|stats| {
+                            if stats.is_null(i) {
+                                None
+                            } else {
+                                Some(stats.value(i))
+                            }
+                        });
+
+                    let num_records = if let Some(stats_str) = stats_json {
+                        serde_json::from_str::<serde_json::Value>(stats_str)
+                            .ok()
+                            .and_then(|v| v.get("numRecords")?.as_u64())
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
+
+                    active_files.insert(
+                        path.clone(),
+                        FileAdd {
+                            path,
+                            partition_values: HashMap::new(),
+                            size,
+                            modification_time: mod_time,
+                            data_change: true,
+                            stats: FileStats {
+                                num_records,
+                                min_values: HashMap::new(),
+                                max_values: HashMap::new(),
+                                null_count: HashMap::new(),
+                            },
+                            tags: None,
+                            base_row_id: None,
+                            default_row_commit_version: None,
+                            clustering_provider: None,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    if let Some(idx) = remove_column_idx {
+        if let Some(remove_array) = batch.column(idx).as_struct_opt() {
+            if let Some(path_array) = remove_array
+                .column_by_name("path")
+                .and_then(|col| col.as_string_opt::<i32>())
+            {
+                for i in 0..batch.num_rows() {
+                    if !path_array.is_null(i) {
+                        let path = path_array.value(i).to_string();
+                        active_files.remove(&path);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn read_lines(path: &Path) -> io::Result<Vec<String>> {
     let file = fs::File::open(path)?;
     let reader = BufReader::new(file);
@@ -441,10 +598,30 @@ pub fn summarize_tables_paginated(
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| delta_log.to_string_lossy().into_owned());
 
+        let checkpoint_metadata = read_checkpoint_metadata(&delta_log).ok().flatten();
+
+        let all_adds = if let Some(ref checkpoint) = checkpoint_metadata {
+            read_checkpoint_parquet(&delta_log, checkpoint.version).unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+
+        let checkpoint_version = checkpoint_metadata.as_ref().map(|c| c.version).unwrap_or(0);
+
         let json_files = get_json_files_from_delta_logs(&[delta_log.clone()])?;
 
-        // Parse version from filename (e.g., 00000000000000000052.json -> 52)
-        let version = json_files
+        let json_files_to_read: Vec<_> = json_files
+            .into_iter()
+            .filter(|p| {
+                p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(|v| v > checkpoint_version)
+                    .unwrap_or(true)
+            })
+            .collect();
+
+        let version = json_files_to_read
             .iter()
             .filter_map(|p| {
                 p.file_stem()
@@ -452,12 +629,12 @@ pub fn summarize_tables_paginated(
                     .and_then(|s| s.parse::<u64>().ok())
             })
             .max()
-            .unwrap_or(0);
+            .unwrap_or(checkpoint_version);
 
-        let all_adds_mutex = Mutex::new(HashMap::new());
+        let all_adds_mutex = Mutex::new(all_adds);
         let removed_paths_mutex = Mutex::new(std::collections::HashSet::new());
 
-        json_files.par_iter().for_each(|json_file| {
+        json_files_to_read.par_iter().for_each(|json_file| {
             if let Ok(log) = parse_delta_log(json_file) {
                 if !log.adds.is_empty() {
                     let mut all_adds = all_adds_mutex.lock().unwrap();
